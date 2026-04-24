@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/svfmt",
+    "crates/svfmt_formatter",
+    "crates/svfmt_sv_ast",
+    "crates/svfmt_sv_formatter",
+    "crates/svfmt_config",
+    "crates/svfmt_diagnostics",
+    "crates/svfmt_workspace",
+    "crates/svfmt_linter",
+    "crates/svfmt_server",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/kelvinchung/svfmt"
+
+[workspace.dependencies]
+svfmt_formatter = { path = "crates/svfmt_formatter" }
+svfmt_sv_ast = { path = "crates/svfmt_sv_ast" }
+svfmt_sv_formatter = { path = "crates/svfmt_sv_formatter" }
+svfmt_config = { path = "crates/svfmt_config" }
+svfmt_diagnostics = { path = "crates/svfmt_diagnostics" }
+svfmt_workspace = { path = "crates/svfmt_workspace" }
+svfmt_linter = { path = "crates/svfmt_linter" }
+svfmt_server = { path = "crates/svfmt_server" }
+
+sv-parser = "0.13"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+thiserror = "1"
+anyhow = "1"
+ignore = "0.4"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_lossless = "allow"
+doc_markdown = "allow"
+trivially_copy_pass_by_ref = "allow"
+needless_pass_by_value = "allow"
+ignored_unit_patterns = "allow"

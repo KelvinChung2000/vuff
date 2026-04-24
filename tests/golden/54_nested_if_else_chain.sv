@@ -1,0 +1,25 @@
+module m;
+always_comb begin
+if (a)
+x = 1;
+else if (b)
+x = 2;
+else if (c)
+x = 3;
+else
+x = 0;
+end
+endmodule
+// expected -----
+module m;
+  always_comb begin
+    if (a)
+      x = 1;
+    else if (b)
+      x = 2;
+    else if (c)
+      x = 3;
+    else
+      x = 0;
+  end
+endmodule

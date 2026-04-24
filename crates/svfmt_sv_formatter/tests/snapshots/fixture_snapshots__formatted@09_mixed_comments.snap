@@ -1,0 +1,16 @@
+---
+source: crates/svfmt_sv_formatter/tests/fixture_snapshots.rs
+assertion_line: 48
+expression: formatted
+input_file: tests/fixtures/09_mixed_comments/input.sv
+---
+// Top banner
+module a (
+  input  wire  clk, // clock
+  input  wire  rst_n,
+  output logic q // result
+);
+  always_ff @(posedge clk) begin // sync
+    q <= rst_n ? ~q : 1'b0; // toggle or clear
+  end
+endmodule // a

@@ -1,0 +1,6 @@
+---
+source: crates/svfmt_sv_formatter/tests/fixture_snapshots.rs
+expression: formatted
+input_file: tests/fixtures/02_minimal_module/input.sv
+---
+module foo; endmodule
