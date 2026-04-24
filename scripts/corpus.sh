@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Opt-in smoke test: run `svfmt format --check` across pinned SHAs of well-known
+# Opt-in smoke test: run `vuff format --check` across pinned SHAs of well-known
 # SystemVerilog designs. Reports per-project pass/fail counts but never fails
 # the CI by itself (that's the whole point of "smoke").
 #
@@ -21,13 +21,13 @@ declare -a REPOS=(
   "cores-veer-eh1|https://github.com/chipsalliance/Cores-VeeR-EH1.git|main"
 )
 
-# Build svfmt once.
-echo "==> building svfmt (release)"
-(cd "$ROOT" && cargo build --release -p svfmt) || {
+# Build vuff once.
+echo "==> building vuff (release)"
+(cd "$ROOT" && cargo build --release -p vuff) || {
   echo "build failed" >&2
   exit 1
 }
-SVFMT="$ROOT/target/release/svfmt"
+VUFF="$ROOT/target/release/vuff"
 
 clone_repo() {
   local name="$1" url="$2" ref="$3"
@@ -52,7 +52,7 @@ scan_repo() {
   local total=0 clean=0 would_change=0 errored=0
   while IFS= read -r -d '' file; do
     total=$((total + 1))
-    if "$SVFMT" format --check "$file" >/dev/null 2>&1; then
+    if "$VUFF" format --check "$file" >/dev/null 2>&1; then
       clean=$((clean + 1))
     else
       case $? in

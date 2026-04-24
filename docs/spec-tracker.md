@@ -1,4 +1,4 @@
-# svfmt feature tracker
+# vuff feature tracker
 
 Living index of the SystemVerilog language surface we format, grouped by
 IEEE 1800-2017 Annex A. Status values:
@@ -9,7 +9,7 @@ IEEE 1800-2017 Annex A. Status values:
 - `skip-v0.1` — explicitly deferred per plan
 
 When you touch a row: (1) bump status, (2) list the owning module file under
-`crates/svfmt_sv_formatter/src/`, (3) cite the golden(s) proving it, and
+`crates/vuff_sv_formatter/src/`, (3) cite the golden(s) proving it, and
 (4) keep a short "known gaps" note if `wip`. Never mark a row `done` unless
 every listed golden passes **and** is exercised by both default and at least
 one non-default config.
@@ -25,13 +25,13 @@ productions — use those as the dispatch keys.
    shape, and one that would trigger a wrap at `line_width = 60`. Use
    `// config:` and `// xfail:` directives in the golden header.
 3. Implement the rule in its owning module file (see layout below).
-4. Run `cargo test -p svfmt_sv_formatter` — all 29+ goldens must still
+4. Run `cargo test -p vuff_sv_formatter` — all 29+ goldens must still
    pass. Bump the row's status.
 
 ## Module layout (target, ruff-shaped)
 
 ```
-crates/svfmt_sv_formatter/src/
+crates/vuff_sv_formatter/src/
   lib.rs              format_source entry point
   context.rs          FormatCtx (opts + source + comments + indent state)
   format_ext.rs       Format trait + FormatNodeRule dispatch
