@@ -1,33 +1,33 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/svfmt",
-    "crates/svfmt_formatter",
-    "crates/svfmt_sv_ast",
-    "crates/svfmt_sv_formatter",
-    "crates/svfmt_config",
-    "crates/svfmt_diagnostics",
-    "crates/svfmt_workspace",
-    "crates/svfmt_linter",
-    "crates/svfmt_server",
+    "crates/vuff",
+    "crates/vuff_formatter",
+    "crates/vuff_sv_ast",
+    "crates/vuff_sv_formatter",
+    "crates/vuff_config",
+    "crates/vuff_diagnostics",
+    "crates/vuff_workspace",
+    "crates/vuff_linter",
+    "crates/vuff_server",
 ]
 
 [workspace.package]
 version = "0.0.1"
 edition = "2021"
 rust-version = "1.80"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/kelvinchung/svfmt"
+license = "Apache-2.0"
+repository = "https://github.com/KelvinChung2000/vuff"
 
 [workspace.dependencies]
-svfmt_formatter = { path = "crates/svfmt_formatter" }
-svfmt_sv_ast = { path = "crates/svfmt_sv_ast" }
-svfmt_sv_formatter = { path = "crates/svfmt_sv_formatter" }
-svfmt_config = { path = "crates/svfmt_config" }
-svfmt_diagnostics = { path = "crates/svfmt_diagnostics" }
-svfmt_workspace = { path = "crates/svfmt_workspace" }
-svfmt_linter = { path = "crates/svfmt_linter" }
-svfmt_server = { path = "crates/svfmt_server" }
+vuff_formatter = { path = "crates/vuff_formatter" }
+vuff_sv_ast = { path = "crates/vuff_sv_ast" }
+vuff_sv_formatter = { path = "crates/vuff_sv_formatter" }
+vuff_config = { path = "crates/vuff_config" }
+vuff_diagnostics = { path = "crates/vuff_diagnostics" }
+vuff_workspace = { path = "crates/vuff_workspace" }
+vuff_linter = { path = "crates/vuff_linter" }
+vuff_server = { path = "crates/vuff_server" }
 
 sv-parser = "0.13"
 clap = { version = "4", features = ["derive"] }
