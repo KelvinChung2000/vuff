@@ -1,10 +1,10 @@
 //! Snapshot tests driven by `tests/fixtures/<name>/input.sv` files at the
-//! repo root. If a fixture directory contains a `.svlint.toml`, its
+//! repo root. If a fixture directory contains a `vuff.toml`, its
 //! `[format]` section is used; otherwise defaults apply.
 
 use std::path::{Path, PathBuf};
 
-use vuff_config::{FormatOptions, SvlintConfigFile};
+use vuff_config::{FormatOptions, VuffConfigFile, CONFIG_FILE_NAME};
 use vuff_sv_formatter::format_source;
 
 fn fixtures_dir() -> PathBuf {
@@ -20,12 +20,12 @@ fn fixtures_dir() -> PathBuf {
 }
 
 fn load_fixture_options(dir: &Path) -> FormatOptions {
-    let cfg_path = dir.join(".svlint.toml");
+    let cfg_path = dir.join(CONFIG_FILE_NAME);
     if !cfg_path.is_file() {
         return FormatOptions::default();
     }
-    let src = std::fs::read_to_string(&cfg_path).expect("read .svlint.toml");
-    let cfg: SvlintConfigFile = toml::from_str(&src).expect("parse .svlint.toml");
+    let src = std::fs::read_to_string(&cfg_path).expect("read vuff.toml");
+    let cfg: VuffConfigFile = toml::from_str(&src).expect("parse vuff.toml");
     FormatOptions::resolve(&cfg.format)
 }
 

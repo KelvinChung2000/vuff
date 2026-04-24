@@ -48,7 +48,7 @@ struct FormatArgs {
     /// Filename associated with stdin (used for config discovery).
     #[arg(long)]
     stdin_filename: Option<PathBuf>,
-    /// Explicit path to `.svlint.toml`.
+    /// Explicit path to `vuff.toml`.
     #[arg(long)]
     config: Option<PathBuf>,
     /// Fail if a format pass does not parse-round-trip. Always on; kept for
@@ -84,7 +84,7 @@ fn run() -> Result<u8> {
 }
 
 fn resolve_config(explicit: Option<&Path>, start: &Path) -> Result<ResolvedConfig> {
-    let env = std::env::var_os("SVLINT_CONFIG");
+    let env = std::env::var_os("VUFF_CONFIG");
     let env_ref: Option<&OsString> = env.as_ref();
     let cfg = load_config(explicit, env_ref.map(AsRef::as_ref), start).context("load config")?;
     Ok(cfg)

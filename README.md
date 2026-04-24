@@ -82,12 +82,12 @@ formatted: `.sv`, `.svh`, `.v`, and `.vh`.
 
 ## Configuration
 
-`vuff` reads a `.svlint.toml` file so formatting and future linting can share
-one project config. Resolution order is:
+`vuff` reads a `vuff.toml` file so formatting and future linting can share one
+project config. Resolution order is:
 
-1. `--config path/to/.svlint.toml`
-2. `SVLINT_CONFIG`
-3. Walk up from the input path looking for `.svlint.toml`
+1. `--config path/to/vuff.toml`
+2. `VUFF_CONFIG`
+3. Walk up from the input path looking for `vuff.toml`
 4. Built-in defaults
 
 Example:

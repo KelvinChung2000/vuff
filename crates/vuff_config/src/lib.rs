@@ -1,4 +1,4 @@
-//! `.svlint.toml` loader with a new `[format]` section.
+//! `vuff.toml` loader with a `[format]` section.
 //!
 //! Milestone 1 stub: type surface only. Discovery + file loading land in
 //! milestone 3.
@@ -34,11 +34,13 @@ pub enum TrailingComma {
     Multiline,
 }
 
-/// Raw on-disk shape of `.svlint.toml`. Unknown sections (`[option]`,
+pub const CONFIG_FILE_NAME: &str = "vuff.toml";
+
+/// Raw on-disk shape of `vuff.toml`. Unknown sections (`[option]`,
 /// `[textrules]`, `[syntaxrules]`) are captured into `_other` so they do not
 /// break deserialization.
 #[derive(Debug, Default, Deserialize)]
-pub struct SvlintConfigFile {
+pub struct VuffConfigFile {
     #[serde(default)]
     pub format: FormatSection,
     #[serde(flatten)]
@@ -129,7 +131,7 @@ pub enum ConfigSource {
     File(std::path::PathBuf),
 }
 
-/// Walk up from `start` looking for `.svlint.toml`. If `start` is a file,
+/// Walk up from `start` looking for `vuff.toml`. If `start` is a file,
 /// we begin the search in its parent directory.
 #[must_use]
 pub fn find_config_file(start: &std::path::Path) -> Option<std::path::PathBuf> {
@@ -139,7 +141,7 @@ pub fn find_config_file(start: &std::path::Path) -> Option<std::path::PathBuf> {
         start.to_path_buf()
     };
     loop {
-        let candidate = cur.join(".svlint.toml");
+        let candidate = cur.join(CONFIG_FILE_NAME);
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -149,16 +151,16 @@ pub fn find_config_file(start: &std::path::Path) -> Option<std::path::PathBuf> {
     }
 }
 
-/// Read and parse a `.svlint.toml` from disk, extracting `[format]`.
+/// Read and parse a `vuff.toml` from disk, extracting `[format]`.
 pub fn load_file(path: &std::path::Path) -> Result<FormatOptions, ConfigError> {
     let src = std::fs::read_to_string(path)?;
-    let cfg: SvlintConfigFile = toml::from_str(&src)?;
+    let cfg: VuffConfigFile = toml::from_str(&src)?;
     Ok(FormatOptions::resolve(&cfg.format))
 }
 
 /// Full resolution pipeline.
 ///
-/// Order: explicit `--config` > `SVLINT_CONFIG` env > walk-up discovery > defaults.
+/// Order: explicit `--config` > `VUFF_CONFIG` env > walk-up discovery > defaults.
 /// `search_start` is where walk-up begins (typically cwd, or the first input file).
 pub fn load_config(
     explicit: Option<&std::path::Path>,
@@ -213,7 +215,7 @@ mod tests {
             line_width = 120
             indent_style = "tabs"
         "#;
-        let cfg: SvlintConfigFile = toml::from_str(src).unwrap();
+        let cfg: VuffConfigFile = toml::from_str(src).unwrap();
         let opts = FormatOptions::resolve(&cfg.format);
         assert_eq!(opts.line_width, 120);
         assert_eq!(opts.indent_style, IndentStyle::Tabs);
@@ -221,7 +223,7 @@ mod tests {
 
     #[test]
     fn defaults_when_empty() {
-        let cfg: SvlintConfigFile = toml::from_str("").unwrap();
+        let cfg: VuffConfigFile = toml::from_str("").unwrap();
         let opts = FormatOptions::resolve(&cfg.format);
         assert_eq!(opts.line_width, 100);
     }
@@ -232,12 +234,12 @@ mod tests {
         let nested = root.path().join("a").join("b");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(
-            root.path().join(".svlint.toml"),
+            root.path().join(CONFIG_FILE_NAME),
             "[format]\nline_width = 77\n",
         )
         .unwrap();
         let found = find_config_file(&nested).unwrap();
-        assert_eq!(found, root.path().join(".svlint.toml"));
+        assert_eq!(found, root.path().join(CONFIG_FILE_NAME));
         let resolved = load_config(None, None, &nested).unwrap();
         assert_eq!(resolved.options.line_width, 77);
     }
@@ -246,7 +248,7 @@ mod tests {
     fn explicit_path_wins_over_walk_up() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(
-            root.path().join(".svlint.toml"),
+            root.path().join(CONFIG_FILE_NAME),
             "[format]\nline_width = 50\n",
         )
         .unwrap();

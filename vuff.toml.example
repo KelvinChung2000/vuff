@@ -1,0 +1,8 @@
+[format]
+line_width = 100
+indent_width = 2
+indent_style = "spaces"
+begin_style = "k_and_r"
+port_list_style = "one_per_line"
+trailing_comma = "multiline"
+wrap_default_nettype = false
