@@ -1,0 +1,17 @@
+---
+source: crates/vuff_sv_formatter/tests/fixture_snapshots.rs
+assertion_line: 48
+expression: formatted
+input_file: tests/fixtures/11_generate/input.sv
+---
+module a #(parameter int N = 4) (
+  input  wire          clk,
+  output logic [N-1:0] q
+);
+  genvar i;
+  generate
+      for (i = 0; i < N; i++) begin : g
+      always_ff @(posedge clk) q[i] <= ~q[i];
+    end
+  endgenerate
+endmodule

@@ -1,0 +1,15 @@
+[package]
+name = "vuff_sv_ast"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+sv-parser.workspace = true
+vuff_diagnostics.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

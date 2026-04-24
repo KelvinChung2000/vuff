@@ -1,0 +1,16 @@
+---
+source: crates/vuff_sv_formatter/tests/fixture_snapshots.rs
+assertion_line: 48
+expression: formatted
+input_file: tests/fixtures/04_always_ff/input.sv
+---
+module a (
+  input  wire  clk,
+  input  wire  rst_n,
+  output logic q
+);
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) q <= 1'b0;
+    else q <= ~q;
+  end
+endmodule

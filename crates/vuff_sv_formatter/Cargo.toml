@@ -1,0 +1,21 @@
+[package]
+name = "vuff_sv_formatter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+vuff_formatter.workspace = true
+vuff_sv_ast.workspace = true
+vuff_config.workspace = true
+vuff_diagnostics.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+insta = { version = "1", features = ["glob"] }
+toml.workspace = true
+
+[lints]
+workspace = true

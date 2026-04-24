@@ -1,8 +1,0 @@
----
-source: crates/svfmt_sv_formatter/tests/fixture_snapshots.rs
-expression: formatted
-input_file: tests/fixtures/01_empty_comments_only/input.sv
----
-// only comments
-/* just a block comment */
-// nothing else
