@@ -137,7 +137,7 @@ Add the repo to the consuming project's `.pre-commit-config.yaml`, pinning
 ```yaml
 repos:
   - repo: https://github.com/KelvinChung2000/vuff
-    rev: v0.1.0  # any tag from the GitHub Releases page
+    rev: vX.Y.Z  # pick a tag from the GitHub Releases page
     hooks:
       - id: vuff-format
 ```
@@ -200,7 +200,8 @@ How it works:
 
 1. Pull request titles must follow Conventional Commits (`feat:`, `fix:`,
    `chore:`, `docs:`, `refactor:`, `test:`, `ci:`, `build:`, `perf:`,
-   `style:`, `revert:`). The `lint-pr` workflow gates this on every PR.
+   `style:`, `revert:`). This is enforced manually by the maintainer at merge
+   time — release-please will only pick up commits whose subjects match.
 2. On every push to `main`, `.github/workflows/release-please.yml` runs.
    release-please scans commits since the last release and either opens or
    updates a single **Release PR** that bumps `[workspace.package].version`
