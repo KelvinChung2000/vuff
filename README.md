@@ -24,9 +24,10 @@ directive and attribute placement sane.
 
 ## Status
 
-This repository is pre-release. The formatter exists, but linting is not
-implemented yet. The linter is planned to be based on, or act as a mostly
-transparent compatibility layer around, `svlint`.
+This repository is pre-release. The formatter exists. Linting is wired through
+the `svlint` crate behind the `vuff lint` frontend, and the language server is
+vendored from `svls` so `vuff` can remain the public interface while still
+reading `vuff.toml`.
 
 The public tool and Rust workspace now use the `vuff` name throughout.
 
@@ -71,10 +72,22 @@ Format stdin:
 vuff format --stdin-filename rtl/example.sv < rtl/example.sv
 ```
 
+Lint files:
+
+```sh
+vuff lint rtl/
+```
+
 Show resolved configuration:
 
 ```sh
 vuff config show
+```
+
+Run the language server over stdio:
+
+```sh
+vuff server
 ```
 
 Directory inputs are walked recursively. Files with these extensions are
@@ -93,15 +106,20 @@ project config. Resolution order is:
 Example:
 
 ```toml
-[format]
+[option]
 line_width = 100
 indent_width = 2
 indent_style = "spaces"
+
+[format]
 begin_style = "k_and_r"
 port_list_style = "one_per_line"
 trailing_comma = "multiline"
 wrap_default_nettype = false
 ```
+
+Settings that must agree between linting and formatting live under
+`[option]`. Formatter-only behavior lives under `[format]`.
 
 The formatter intentionally has few knobs. New options should only be added
 when they cover real SystemVerilog style constraints that cannot be handled by
@@ -123,3 +141,7 @@ feature tracker in `docs/spec-tracker.md`.
 ## License
 
 Licensed under the Apache License, Version 2.0. See `LICENSE`.
+
+Vendored upstream server code retains its original MIT license:
+
+- `crates/vuff_server/SVLS_LICENSE`
