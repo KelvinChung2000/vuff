@@ -4,3 +4,5 @@ Cargo.lock.bak
 .DS_Store
 target/
 /target/corpus/
+
+.codex
