@@ -1,6 +1,6 @@
 //! Snapshot tests driven by `tests/fixtures/<name>/input.sv` files at the
 //! repo root. If a fixture directory contains a `vuff.toml`, its
-//! `[format]` section is used; otherwise defaults apply.
+//! `[option]` and `[format]` sections are used; otherwise defaults apply.
 
 use std::path::{Path, PathBuf};
 
@@ -26,7 +26,7 @@ fn load_fixture_options(dir: &Path) -> FormatOptions {
     }
     let src = std::fs::read_to_string(&cfg_path).expect("read vuff.toml");
     let cfg: VuffConfigFile = toml::from_str(&src).expect("parse vuff.toml");
-    FormatOptions::resolve(&cfg.format)
+    FormatOptions::resolve(&cfg.option, &cfg.format)
 }
 
 #[test]

@@ -1,4 +1,4 @@
-//! `vuff.toml` loader with a `[format]` section.
+//! `vuff.toml` loader with shared `[option]` settings and a `[format]` section.
 //!
 //! Milestone 1 stub: type surface only. Discovery + file loading land in
 //! milestone 3.
@@ -36,11 +36,13 @@ pub enum TrailingComma {
 
 pub const CONFIG_FILE_NAME: &str = "vuff.toml";
 
-/// Raw on-disk shape of `vuff.toml`. Unknown sections (`[option]`,
-/// `[textrules]`, `[syntaxrules]`) are captured into `_other` so they do not
-/// break deserialization.
+/// Raw on-disk shape of `vuff.toml`. Unknown sections (`[textrules]`,
+/// `[syntaxrules]`) are captured into `_other` so they do not break
+/// deserialization.
 #[derive(Debug, Default, Deserialize)]
 pub struct VuffConfigFile {
+    #[serde(default)]
+    pub option: OptionSection,
     #[serde(default)]
     pub format: FormatSection,
     #[serde(flatten)]
@@ -49,15 +51,21 @@ pub struct VuffConfigFile {
 }
 
 #[derive(Debug, Default, Clone, Deserialize)]
-pub struct FormatSection {
+pub struct OptionSection {
     pub line_width: Option<u16>,
     pub indent_width: Option<u8>,
     pub indent_style: Option<IndentStyle>,
+    pub exclude: Option<Vec<String>>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct FormatSection {
     pub begin_style: Option<BeginStyle>,
     pub port_list_style: Option<PortListStyle>,
     pub trailing_comma: Option<TrailingComma>,
     pub wrap_default_nettype: Option<bool>,
-    pub exclude: Option<Vec<String>>,
+    #[serde(flatten)]
+    other: toml::Table,
 }
 
 /// Resolved options — every field defaulted, ready for the formatter to read.
@@ -92,16 +100,16 @@ impl Default for FormatOptions {
 
 impl FormatOptions {
     #[must_use]
-    pub fn resolve(section: &FormatSection) -> Self {
+    pub fn resolve(option: &OptionSection, format: &FormatSection) -> Self {
         let d = Self::default();
         Self {
-            line_width: section.line_width.unwrap_or(d.line_width),
-            indent_width: section.indent_width.unwrap_or(d.indent_width),
-            indent_style: section.indent_style.unwrap_or(d.indent_style),
-            begin_style: section.begin_style.unwrap_or(d.begin_style),
-            port_list_style: section.port_list_style.unwrap_or(d.port_list_style),
-            trailing_comma: section.trailing_comma.unwrap_or(d.trailing_comma),
-            wrap_default_nettype: section
+            line_width: option.line_width.unwrap_or(d.line_width),
+            indent_width: option.indent_width.unwrap_or(d.indent_width),
+            indent_style: option.indent_style.unwrap_or(d.indent_style),
+            begin_style: format.begin_style.unwrap_or(d.begin_style),
+            port_list_style: format.port_list_style.unwrap_or(d.port_list_style),
+            trailing_comma: format.trailing_comma.unwrap_or(d.trailing_comma),
+            wrap_default_nettype: format
                 .wrap_default_nettype
                 .unwrap_or(d.wrap_default_nettype),
         }
@@ -116,6 +124,8 @@ pub enum ConfigError {
     Toml(#[from] toml::de::Error),
     #[error("config file not found: {0}")]
     NotFound(std::path::PathBuf),
+    #[error("shared option `{0}` must be set under [option], not [format]")]
+    SharedOptionInFormat(String),
 }
 
 /// Resolved view of a config load — the options plus where they came from.
@@ -151,11 +161,22 @@ pub fn find_config_file(start: &std::path::Path) -> Option<std::path::PathBuf> {
     }
 }
 
-/// Read and parse a `vuff.toml` from disk, extracting `[format]`.
+/// Read and parse a `vuff.toml`, applying shared `[option]` settings and
+/// formatter-specific `[format]` settings.
 pub fn load_file(path: &std::path::Path) -> Result<FormatOptions, ConfigError> {
     let src = std::fs::read_to_string(path)?;
     let cfg: VuffConfigFile = toml::from_str(&src)?;
-    Ok(FormatOptions::resolve(&cfg.format))
+    validate_config(&cfg)?;
+    Ok(FormatOptions::resolve(&cfg.option, &cfg.format))
+}
+
+fn validate_config(cfg: &VuffConfigFile) -> Result<(), ConfigError> {
+    for key in ["line_width", "indent_width", "indent_style"] {
+        if cfg.format.other.contains_key(key) {
+            return Err(ConfigError::SharedOptionInFormat(key.to_string()));
+        }
+    }
+    Ok(())
 }
 
 /// Full resolution pipeline.
@@ -206,26 +227,62 @@ mod tests {
     fn tolerates_unknown_sections() {
         let src = r#"
             [option]
-            exclude_paths = ["a"]
+            exclude = ["a"]
+            line_width = 120
+            indent_style = "tabs"
 
             [textrules]
             style_textwidth = true
 
             [format]
-            line_width = 120
-            indent_style = "tabs"
+            begin_style = "allman"
         "#;
         let cfg: VuffConfigFile = toml::from_str(src).unwrap();
-        let opts = FormatOptions::resolve(&cfg.format);
+        validate_config(&cfg).unwrap();
+        let opts = FormatOptions::resolve(&cfg.option, &cfg.format);
         assert_eq!(opts.line_width, 120);
         assert_eq!(opts.indent_style, IndentStyle::Tabs);
+        assert_eq!(opts.begin_style, BeginStyle::Allman);
     }
 
     #[test]
     fn defaults_when_empty() {
         let cfg: VuffConfigFile = toml::from_str("").unwrap();
-        let opts = FormatOptions::resolve(&cfg.format);
+        let opts = FormatOptions::resolve(&cfg.option, &cfg.format);
         assert_eq!(opts.line_width, 100);
+    }
+
+    #[test]
+    fn shared_options_apply_to_formatting() {
+        let src = r#"
+            [option]
+            line_width = 88
+            indent_width = 4
+            indent_style = "tabs"
+        "#;
+        let cfg: VuffConfigFile = toml::from_str(src).unwrap();
+        let opts = FormatOptions::resolve(&cfg.option, &cfg.format);
+        assert_eq!(opts.line_width, 88);
+        assert_eq!(opts.indent_width, 4);
+        assert_eq!(opts.indent_style, IndentStyle::Tabs);
+    }
+
+    #[test]
+    fn shared_options_are_not_allowed_in_format_section() {
+        let src = r#"
+            [option]
+            line_width = 88
+            indent_width = 4
+            indent_style = "tabs"
+
+            [format]
+            line_width = 120
+        "#;
+        let cfg: VuffConfigFile = toml::from_str(src).unwrap();
+        assert!(matches!(
+            validate_config(&cfg),
+            Err(ConfigError::SharedOptionInFormat(key)) if key == "line_width"
+        ));
     }
 
     #[test]
@@ -235,7 +292,7 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::write(
             root.path().join(CONFIG_FILE_NAME),
-            "[format]\nline_width = 77\n",
+            "[option]\nline_width = 77\n",
         )
         .unwrap();
         let found = find_config_file(&nested).unwrap();
@@ -249,11 +306,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(
             root.path().join(CONFIG_FILE_NAME),
-            "[format]\nline_width = 50\n",
+            "[option]\nline_width = 50\n",
         )
         .unwrap();
         let override_file = root.path().join("other.toml");
-        std::fs::write(&override_file, "[format]\nline_width = 200\n").unwrap();
+        std::fs::write(&override_file, "[option]\nline_width = 200\n").unwrap();
         let r = load_config(Some(&override_file), None, root.path()).unwrap();
         assert_eq!(r.options.line_width, 200);
     }

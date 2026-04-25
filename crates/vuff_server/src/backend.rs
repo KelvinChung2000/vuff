@@ -1,0 +1,346 @@
+#![allow(
+    clippy::assigning_clones,
+    clippy::default_trait_access,
+    clippy::manual_let_else,
+    clippy::needless_borrow,
+    clippy::needless_borrows_for_generic_args,
+    clippy::redundant_else,
+    clippy::uninlined_format_args,
+    clippy::unnecessary_debug_formatting,
+    clippy::unnecessary_semicolon,
+    clippy::wildcard_imports
+)]
+
+use crate::config::Config;
+use log::debug;
+use std::collections::HashMap;
+use std::default::Default;
+use std::env;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
+use sv_parser::{parse_sv_str, Define, DefineText};
+use svlint::linter::{LintFailed, Linter, TextRuleEvent};
+use tower_lsp::jsonrpc::Result;
+use tower_lsp::lsp_types::*;
+use tower_lsp::{async_trait, Client, LanguageServer};
+
+pub struct Backend {
+    client: Client,
+    root_uri: Arc<RwLock<Option<Url>>>,
+    config: Arc<RwLock<Option<Config>>>,
+    linter: Arc<RwLock<Option<Linter>>>,
+}
+
+impl Backend {
+    pub fn new(client: Client) -> Self {
+        Backend {
+            client,
+            root_uri: Default::default(),
+            config: Default::default(),
+            linter: Default::default(),
+        }
+    }
+
+    fn push_failed(failed: LintFailed, src_path: &PathBuf, s: &str, ret: &mut Vec<Diagnostic>) {
+        debug!("{:?}", failed);
+        if failed.path == *src_path {
+            let (line, col) = get_position(s, failed.beg);
+            ret.push(Diagnostic::new(
+                Range::new(
+                    Position::new(line, col),
+                    Position::new(line, col + failed.len as u32),
+                ),
+                Some(DiagnosticSeverity::WARNING),
+                Some(NumberOrString::String(failed.name)),
+                Some(String::from("vuff")),
+                failed.hint,
+                None,
+                None,
+            ));
+        }
+    }
+
+    fn lint(&self, s: &str, path: &Path) -> Vec<Diagnostic> {
+        let mut ret = Vec::new();
+
+        let root_uri = self.root_uri.read().unwrap();
+        let root_uri = if let Some(ref root_uri) = *root_uri {
+            if let Ok(root_uri) = root_uri.to_file_path() {
+                root_uri
+            } else {
+                PathBuf::from("")
+            }
+        } else {
+            PathBuf::from("")
+        };
+        let mut linter = self.linter.write().unwrap();
+        if let Some(ref mut linter) = *linter {
+            let config = self.config.read().unwrap();
+            let mut include_paths = Vec::new();
+            let mut defines = HashMap::new();
+            if let Some(ref config) = *config {
+                for path in &config.verilog.include_paths {
+                    let mut p = root_uri.clone();
+                    p.push(PathBuf::from(path));
+                    include_paths.push(p);
+                }
+                for define in &config.verilog.defines {
+                    let mut define = define.splitn(2, '=');
+                    let ident = String::from(define.next().unwrap());
+                    let text = define
+                        .next()
+                        .and_then(|x| enquote::unescape(x, None).ok())
+                        .map(|x| DefineText::new(x, None));
+                    let define = Define::new(ident.clone(), vec![], text);
+                    defines.insert(ident, Some(define));
+                }
+                for plugin in &config.verilog.plugins {
+                    debug!("plugin: {:?}", &plugin);
+                    linter.load(&plugin).unwrap();
+                }
+            };
+            debug!("include_paths: {:?}", include_paths);
+            debug!("defines: {:?}", defines);
+
+            let src_path = if let Ok(x) = path.strip_prefix(root_uri) {
+                x.to_path_buf()
+            } else {
+                PathBuf::from("")
+            };
+
+            // Signal beginning of file to all TextRules, which *may* be used
+            // by textrules to reset their internal state.
+            let _ = linter.textrules_check(TextRuleEvent::StartOfFile, &src_path, &0);
+
+            // Iterate over lines in the file, applying each textrule to each line
+            // in turn.
+            let mut beg: usize = 0;
+            for line in s.split_inclusive('\n') {
+                let line_stripped = line.trim_end_matches(&['\n', '\r']);
+
+                for failed in
+                    linter.textrules_check(TextRuleEvent::Line(&line_stripped), &src_path, &beg)
+                {
+                    Self::push_failed(failed, &src_path, &s, &mut ret);
+                }
+                beg += line.len();
+            }
+
+            // Iterate over nodes in the concrete syntax tree, applying each
+            // syntaxrule to each node in turn.
+            let parsed = parse_sv_str(&s, &src_path, &defines, &include_paths, false, false);
+            match parsed {
+                Ok((syntax_tree, _new_defines)) => {
+                    for event in syntax_tree.into_iter().event() {
+                        for failed in linter.syntaxrules_check(&syntax_tree, &event) {
+                            Self::push_failed(failed, &src_path, &s, &mut ret);
+                        }
+                    }
+                }
+                Err(x) => {
+                    debug!("parse_error: {:?}", x);
+                    if let sv_parser::Error::Parse(Some((path, pos))) = x {
+                        if path.as_path() == src_path {
+                            let (line, col) = get_position(s, pos);
+                            let line_end = get_line_end(s, pos);
+                            let len = line_end - pos as u32;
+                            ret.push(Diagnostic::new(
+                                Range::new(
+                                    Position::new(line, col),
+                                    Position::new(line, col + len),
+                                ),
+                                Some(DiagnosticSeverity::ERROR),
+                                None,
+                                Some(String::from("vuff")),
+                                String::from("parse error"),
+                                None,
+                                None,
+                            ));
+                        }
+                    }
+                }
+            }
+        } else {
+            debug!("linter initialization failed");
+        }
+        ret
+    }
+}
+
+#[async_trait]
+impl LanguageServer for Backend {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        debug!("root_uri: {:?}", params.root_uri);
+        let search_start = params
+            .root_uri
+            .as_ref()
+            .and_then(|uri| uri.to_file_path().ok())
+            .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+        let config_vuff = search_config_vuff(&search_start);
+        debug!("config_vuff: {:?}", config_vuff);
+        let config = match generate_config(config_vuff.clone()) {
+            Ok(x) => x,
+            Err(x) => {
+                self.client.show_message(MessageType::WARNING, &x).await;
+                Config::default()
+            }
+        };
+
+        if config.option.linter {
+            let linter = match generate_linter(&search_start) {
+                Ok(x) => x,
+                Err(x) => {
+                    self.client.show_message(MessageType::WARNING, &x).await;
+                    Linter::new(svlint::config::Config::new().enable_all())
+                }
+            };
+
+            let mut w = self.linter.write().unwrap();
+            *w = Some(linter);
+        }
+
+        let mut w = self.root_uri.write().unwrap();
+        *w = params.root_uri.clone();
+
+        let mut w = self.config.write().unwrap();
+        *w = Some(config);
+
+        Ok(InitializeResult {
+            capabilities: ServerCapabilities {
+                text_document_sync: Some(TextDocumentSyncCapability::Kind(
+                    TextDocumentSyncKind::FULL,
+                )),
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                        supported: Some(true),
+                        change_notifications: Some(OneOf::Left(true)),
+                    }),
+                    file_operations: None,
+                }),
+                ..ServerCapabilities::default()
+            },
+            server_info: Some(ServerInfo {
+                name: String::from("vuff"),
+                version: Some(String::from(env!("CARGO_PKG_VERSION"))),
+            }),
+        })
+    }
+
+    async fn initialized(&self, _: InitializedParams) {
+        self.client
+            .log_message(MessageType::INFO, "server initialized")
+            .await;
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn did_change_workspace_folders(&self, _: DidChangeWorkspaceFoldersParams) {}
+
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        debug!("did_open");
+        let path = params.text_document.uri.to_file_path().unwrap();
+        let diag = self.lint(&params.text_document.text, &path);
+        self.client
+            .publish_diagnostics(
+                params.text_document.uri,
+                diag,
+                Some(params.text_document.version),
+            )
+            .await;
+    }
+
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        debug!("did_change");
+        let path = params.text_document.uri.to_file_path().unwrap();
+        let diag = self.lint(&params.content_changes[0].text, &path);
+        self.client
+            .publish_diagnostics(
+                params.text_document.uri,
+                diag,
+                Some(params.text_document.version),
+            )
+            .await;
+    }
+}
+
+fn search_config_vuff(search_start: &Path) -> Option<PathBuf> {
+    if let Ok(c) = env::var("VUFF_CONFIG") {
+        let candidate = Path::new(&c);
+        if candidate.exists() {
+            return Some(candidate.to_path_buf());
+        } else {
+            debug!(
+                "VUFF_CONFIG=\"{}\" does not exist. Searching hierarchically.",
+                c
+            );
+        }
+    }
+
+    vuff_config::find_config_file(search_start)
+}
+
+fn generate_config(config: Option<PathBuf>) -> std::result::Result<Config, String> {
+    let path = match config {
+        Some(c) => c,
+        _ => return Ok(Default::default()),
+    };
+    let text = std::fs::read_to_string(&path).map_err(|_| {
+        format!(
+            "Failed to read {}. Enable all lint rules.",
+            path.to_string_lossy()
+        )
+    })?;
+    toml::from_str(&text).map_err(|_| {
+        format!(
+            "Failed to parse {}. Enable all lint rules.",
+            path.to_string_lossy()
+        )
+    })
+}
+
+fn generate_linter(search_start: &Path) -> std::result::Result<Linter, String> {
+    let env = env::var_os("VUFF_CONFIG");
+    let resolved = vuff_linter::load_config(None, env.as_deref(), search_start)
+        .map_err(|err| format!("Failed to load vuff lint config: {err}. Enable all lint rules."))?;
+    let config = match resolved.source {
+        vuff_config::ConfigSource::Defaults => resolved.config.enable_all(),
+        vuff_config::ConfigSource::File(_) => resolved.config,
+    };
+    Ok(Linter::new(config))
+}
+
+fn get_position(s: &str, pos: usize) -> (u32, u32) {
+    let mut line = 0;
+    let mut col = 0;
+    let mut p = 0;
+    while p < pos {
+        if let Some(c) = s.get(p..p + 1) {
+            if c == "\n" {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        } else {
+            col += 1;
+        }
+        p += 1;
+    }
+    (line, col)
+}
+
+fn get_line_end(s: &str, pos: usize) -> u32 {
+    let mut p = pos;
+    while p < s.len() {
+        if let Some(c) = s.get(p..p + 1) {
+            if c == "\n" {
+                break;
+            }
+        }
+        p += 1;
+    }
+    p as u32
+}

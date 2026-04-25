@@ -7,6 +7,17 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+enquote.workspace = true
+log.workspace = true
+serde.workspace = true
+simplelog.workspace = true
+sv-parser.workspace = true
+svlint.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tower-lsp.workspace = true
+vuff_config.workspace = true
+vuff_linter.workspace = true
 
 [lints]
 workspace = true
