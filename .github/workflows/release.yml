@@ -1,0 +1,124 @@
+name: release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Tag to publish (must already exist as a GitHub Release).'
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to label artifacts with (manual dry runs only — does not publish).'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --locked --version 0.2.5
+
+      - name: Build
+        shell: bash
+        run: |
+          if [[ "${{ matrix.cross }}" == "true" ]]; then
+            cross build --release --locked --target ${{ matrix.target }} -p vuff
+          else
+            cargo build --release --locked --target ${{ matrix.target }} -p vuff
+          fi
+
+      - name: Resolve tag label
+        id: tag
+        shell: bash
+        run: |
+          tag="${{ inputs.tag }}"
+          [[ -n "$tag" ]] || tag="v0.0.0-dev"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Package archive
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+          target="${{ matrix.target }}"
+          name="vuff-${tag}-${target}"
+          mkdir -p dist
+          if [[ "${target}" == *windows* ]]; then
+            cp "target/${target}/release/vuff.exe" "dist/"
+            (cd dist && 7z a "${name}.zip" vuff.exe >/dev/null && rm vuff.exe)
+            archive="${name}.zip"
+          else
+            cp "target/${target}/release/vuff" "dist/"
+            (cd dist && tar czf "${name}.tar.gz" vuff && rm vuff)
+            archive="${name}.tar.gz"
+          fi
+          (
+            cd dist
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "${archive}" > "${archive}.sha256"
+            else
+              shasum -a 256 "${archive}" > "${archive}.sha256"
+            fi
+          )
+          echo "archive=${archive}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: upload to release
+    needs: build
+    if: ${{ github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: dist/*
+          fail_on_unmatched_files: true
