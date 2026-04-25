@@ -36,6 +36,13 @@ toml = "0.8"
 thiserror = "1"
 anyhow = "1"
 ignore = "0.4"
+svlint = "0.9.5"
+enquote = "1"
+log = "0.4"
+serde_json = "1"
+simplelog = "0.12"
+tower-lsp = "0.20"
+tokio = { version = "1.6", features = ["io-std", "rt"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
