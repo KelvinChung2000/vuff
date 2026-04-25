@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# Bootstrap shim for the vuff pre-commit hooks.
+#
+# pre-commit clones this repo at the user's pinned `rev` and runs this script
+# via `language: script`. We figure out which prebuilt vuff binary matches the
+# checked-out version, download it from GitHub Releases on first use, cache it
+# under XDG_CACHE_HOME, then exec it with the args pre-commit passed in.
+#
+# Args: <subcommand...> [files...]
+#
+# Env overrides (mostly for development):
+#   VUFF_BIN          — path to a vuff binary; skip all download logic.
+#   VUFF_CACHE_DIR    — cache root (default: $XDG_CACHE_HOME/vuff or ~/.cache/vuff).
+#   VUFF_REPO         — owner/name of the GitHub repo (default: KelvinChung2000/vuff).
+#   VUFF_VERSION      — override the version tag (default: read from Cargo.toml).
+#   VUFF_SKIP_VERIFY  — set to 1 to skip sha256 verification.
+
+set -euo pipefail
+
+log() { printf 'vuff-pre-commit: %s\n' "$*" >&2; }
+die() { log "$*"; exit 2; }
+
+script_dir() { cd "$(dirname "$0")" && pwd; }
+SCRIPT_DIR="$(script_dir)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+if [[ -n "${VUFF_BIN:-}" ]]; then
+  exec "$VUFF_BIN" "$@"
+fi
+
+read_version() {
+  if [[ -n "${VUFF_VERSION:-}" ]]; then
+    printf '%s' "$VUFF_VERSION"
+    return 0
+  fi
+  awk -F'"' '
+    /^\[workspace\.package\]/ { in_block = 1; next }
+    /^\[/ && !/^\[workspace\.package\]/ { in_block = 0 }
+    in_block && /^version[[:space:]]*=/ { print $2; exit }
+  ' "$REPO_ROOT/Cargo.toml"
+}
+
+VERSION="$(read_version)"
+[[ -n "$VERSION" ]] || die "could not read version from $REPO_ROOT/Cargo.toml (set VUFF_VERSION to override)"
+
+case "$VERSION" in
+  v*) TAG="$VERSION" ;;
+  *)  TAG="v$VERSION" ;;
+esac
+
+detect_target() {
+  local os arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "$os" in
+    Linux)
+      case "$arch" in
+        x86_64|amd64)   echo "x86_64-unknown-linux-gnu" ;;
+        aarch64|arm64)  echo "aarch64-unknown-linux-gnu" ;;
+        *) return 1 ;;
+      esac ;;
+    Darwin)
+      case "$arch" in
+        x86_64)         echo "x86_64-apple-darwin" ;;
+        arm64|aarch64)  echo "aarch64-apple-darwin" ;;
+        *) return 1 ;;
+      esac ;;
+    MINGW*|MSYS*|CYGWIN*)
+      case "$arch" in
+        x86_64|amd64)   echo "x86_64-pc-windows-msvc" ;;
+        *) return 1 ;;
+      esac ;;
+    *) return 1 ;;
+  esac
+}
+
+TARGET="$(detect_target)" || die "unsupported platform: $(uname -s) $(uname -m). Set VUFF_BIN to a local build."
+
+case "$TARGET" in
+  *windows*) BIN_NAME="vuff.exe"; ARCHIVE_EXT="zip" ;;
+  *)         BIN_NAME="vuff";     ARCHIVE_EXT="tar.gz" ;;
+esac
+
+REPO="${VUFF_REPO:-KelvinChung2000/vuff}"
+CACHE_ROOT="${VUFF_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/vuff}"
+INSTALL_DIR="$CACHE_ROOT/$TAG/$TARGET"
+BIN_PATH="$INSTALL_DIR/$BIN_NAME"
+
+if [[ ! -x "$BIN_PATH" ]]; then
+  ARCHIVE="vuff-${TAG}-${TARGET}.${ARCHIVE_EXT}"
+  URL="https://github.com/${REPO}/releases/download/${TAG}/${ARCHIVE}"
+  CKSUM_URL="${URL}.sha256"
+
+  mkdir -p "$INSTALL_DIR"
+  TMP="$(mktemp -d)"
+  trap 'rm -rf "$TMP"' EXIT
+
+  log "downloading $URL"
+
+  fetch() {
+    local url="$1" out="$2" required="$3"
+    if command -v curl >/dev/null 2>&1; then
+      if [[ "$required" == "required" ]]; then
+        curl --fail --silent --show-error --location --output "$out" "$url"
+      else
+        curl --fail --silent --show-error --location --output "$out" "$url" 2>/dev/null
+      fi
+    elif command -v wget >/dev/null 2>&1; then
+      if [[ "$required" == "required" ]]; then
+        wget --quiet --output-document "$out" "$url"
+      else
+        wget --quiet --output-document "$out" "$url" 2>/dev/null
+      fi
+    else
+      die "need curl or wget on PATH to fetch the vuff binary"
+    fi
+  }
+
+  if ! fetch "$URL" "$TMP/$ARCHIVE" required; then
+    die "failed to download $URL — pin your hook 'rev' to a tagged release of $REPO"
+  fi
+
+  if [[ "${VUFF_SKIP_VERIFY:-}" != "1" ]] && fetch "$CKSUM_URL" "$TMP/$ARCHIVE.sha256" optional; then
+    (
+      cd "$TMP"
+      if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum -c "$ARCHIVE.sha256" >/dev/null
+      elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 -c "$ARCHIVE.sha256" >/dev/null
+      else
+        log "no sha256 tool found; skipping verification"
+      fi
+    ) || die "checksum mismatch for $ARCHIVE"
+  fi
+
+  case "$ARCHIVE_EXT" in
+    tar.gz)
+      tar -xzf "$TMP/$ARCHIVE" -C "$TMP"
+      ;;
+    zip)
+      if command -v unzip >/dev/null 2>&1; then
+        unzip -q "$TMP/$ARCHIVE" -d "$TMP"
+      elif command -v 7z >/dev/null 2>&1; then
+        7z x -y -o"$TMP" "$TMP/$ARCHIVE" >/dev/null
+      else
+        die "need unzip or 7z on PATH to extract $ARCHIVE"
+      fi
+      ;;
+  esac
+
+  EXTRACTED="$(find "$TMP" -type f -name "$BIN_NAME" -print -quit)"
+  [[ -n "$EXTRACTED" ]] || die "$BIN_NAME not found inside $ARCHIVE"
+
+  cp "$EXTRACTED" "$BIN_PATH"
+  chmod +x "$BIN_PATH"
+fi
+
+exec "$BIN_PATH" "$@"
