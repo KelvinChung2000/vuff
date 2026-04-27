@@ -18,8 +18,9 @@ use vuff_sv_ast::{Parsed, SyntaxTree, Token};
 use crate::attribute::spans::{find_attribute_spans, AttributeSpan};
 use crate::directives::DirectiveAnchors;
 use crate::expr::{
-    apostrophe_brace_mask, build_ternary_chains, call_open_paren_mask, concat_brace_masks,
-    select_open_bracket_mask, streaming_concat_mask, ternary_colon_mask, TernaryChainInfo,
+    apostrophe_brace_mask, build_macro_calls, build_ternary_chains, call_open_paren_mask,
+    concat_brace_masks, select_open_bracket_mask, streaming_concat_mask, ternary_colon_mask,
+    MacroCallInfo, TernaryChainInfo,
 };
 use crate::indent_map::cst_depth_map;
 use crate::list::inst_port_list::{collect_inst_port_lists, InstPortList};
@@ -74,10 +75,13 @@ pub(crate) struct FormatCtxMasks {
     pub(crate) wrap_open: Vec<bool>,
     pub(crate) wrap_close: Vec<bool>,
     pub(crate) ternary_chains: TernaryChainInfo,
+    pub(crate) macro_calls: MacroCallInfo,
 }
 
 impl FormatCtxMasks {
-    pub(crate) fn build(tree: &SyntaxTree, tokens: &[Token<'_>], source: &str) -> Self {
+    pub(crate) fn build(parsed: &Parsed, tokens: &[Token<'_>]) -> Self {
+        let tree = &parsed.tree;
+        let source = &parsed.text;
         let attr_spans = find_attribute_spans(tree, source, tokens);
         let port_paren = force_space_before_port_paren_mask(tree, tokens);
         let instance_paren = force_space_before_instance_paren_mask(tree, tokens);
@@ -107,6 +111,7 @@ impl FormatCtxMasks {
         }
         let (wrap_open, wrap_close) = wrap_delimiter_masks(tokens, source, &excluded);
         let ternary_chains = build_ternary_chains(tree, tokens, source);
+        let macro_calls = build_macro_calls(parsed, tokens);
         Self {
             attr_spans,
             port_paren,
@@ -130,6 +135,7 @@ impl FormatCtxMasks {
             wrap_open,
             wrap_close,
             ternary_chains,
+            macro_calls,
         }
     }
 }

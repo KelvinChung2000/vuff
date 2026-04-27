@@ -269,6 +269,14 @@ pub(crate) fn format_token_range(
         if t.offset < cursor {
             continue;
         }
+        // Macro call-site preservation: a token whose origin lies in a
+        // `\`define` body is part of an expansion. We skip the
+        // subsequent tokens of the run; the run's first token is
+        // emitted as the original source's macro call (e.g.
+        // `\`assert(cond)`) instead of the expanded text.
+        if ctx.masks.macro_calls.skip_tok.contains(&global_i) {
+            continue;
+        }
         let between = &src[cursor..t.offset];
 
         // A closer dedents immediately so the token itself prints at the
@@ -472,6 +480,21 @@ pub(crate) fn format_token_range(
                     }
                 }
             }
+        }
+
+        // Macro run start: emit the original call-site text and jump
+        // the cursor past the expansion. Subsequent tokens in the run
+        // are filtered out at the top of this loop.
+        if let Some(run) = ctx.masks.macro_calls.run_at_start.get(&global_i) {
+            f.push_text(run.call_text.clone());
+            cursor = ctx.tokens[run.end].end();
+            prev_text = Some(t.text);
+            prev_depth = curr_depth;
+            prev_was_ternary_colon = false;
+            prev_was_param_pound = false;
+            prev_was_concat_open = false;
+            prev_was_apostrophe_brace = false;
+            continue;
         }
 
         f.push_text(t.text.to_owned());
