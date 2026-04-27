@@ -1,29 +1,26 @@
-//! Detect tokens that came from preprocessor macro expansion and pair
-//! each run of expanded tokens with its original call-site text.
+//! Pair runs of macro-expanded post-pp tokens with the original call-site
+//! text, so the formatter re-emits `` `my_macro(args) `` instead of the
+//! expanded body — i.e. format-don't-expand.
 //!
-//! The formatter walks the post-preprocess CST, so a `\`assert(cond)`
-//! call where the user wrote `\`define assert(...) empty_statement`
-//! becomes the literal token `empty_statement` — the original macro
-//! call has been replaced. Per the project policy of "format, don't
-//! expand", we want the formatted output to read `\`assert(cond)`,
-//! same as the input.
+//! Source of truth is sv-parser-pp's `DirectiveSpan` list (our fork's
+//! additive API): each [`DirectiveKind::MacroUsage`] entry already
+//! carries the call-site text and the post-pp byte range its expansion
+//! occupies. We translate that range to a contiguous run of token
+//! indices via `partition_point`. Verbatim emits the call-site text at
+//! the run's first token and skips the rest.
 //!
-//! Strategy:
-//!
-//! 1. Scan `parsed.original` for `` `define `` directive lines and
-//!    record the byte ranges of each macro's body. A token is
-//!    "macro-expanded" iff its origin (via `Parsed::origin_in_original`)
-//!    falls inside any of those bodies.
-//! 2. Walk the tokens and group consecutive macro-expanded ones into a
-//!    `MacroRun`. A run's call-site source spans from the end of the
-//!    previous non-expanded token's original range to the start of the
-//!    next non-expanded token's original range, then trimmed.
-//! 3. Verbatim emits the call-site text once at the run's first token
-//!    and skips the rest.
+//! Cases the previous text-scan implementation missed but this one
+//! catches:
+//! * Macros whose body is a pure parameter pass-through
+//!   (`` `define wrap(x) x ``) — sv-parser-pp records the call site
+//!   regardless of whether the body has its own tokens.
+//! * Nested macro calls — sv-parser-pp emits a separate usage record
+//!   per call site; the outer run subsumes its inner runs naturally
+//!   because their token indices fall inside the outer's.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use vuff_sv_ast::{Parsed, Token};
+use vuff_sv_ast::{DirectiveDetail, DirectiveKind, Parsed, Token};
 
 #[derive(Debug)]
 pub(crate) struct MacroRun {
@@ -45,187 +42,66 @@ pub(crate) struct MacroCallInfo {
     pub(crate) run_at_start: HashMap<usize, MacroRun>,
     /// Token indices that are part of a macro run but not the first
     /// token. Verbatim must skip them.
-    pub(crate) skip_tok: std::collections::HashSet<usize>,
+    pub(crate) skip_tok: HashSet<usize>,
 }
 
 pub(crate) fn build_macro_calls(parsed: &Parsed, tokens: &[Token<'_>]) -> MacroCallInfo {
-    let define_bodies = scan_define_bodies(&parsed.original);
-    if define_bodies.is_empty() || tokens.is_empty() {
+    if tokens.is_empty() {
         return MacroCallInfo::default();
     }
-    // Tokens whose post-pp position falls inside the verbatim
-    // `\`define` line (which sv-parser preserves in `parsed.text`) are
-    // the directive itself, not a macro expansion. Their origin still
-    // points at the body, so we exclude them by post-pp position.
-    let pp_define_ranges = scan_define_lines_pp(&parsed.text);
-
-    // Per-token origin in original source. `None` if sv-parser couldn't
-    // map (synthesized whitespace, included files, etc.).
-    let origins: Vec<Option<usize>> = tokens
-        .iter()
-        .map(|t| parsed.origin_in_original(t.offset))
-        .collect();
-    let in_macro: Vec<bool> = origins
-        .iter()
-        .zip(tokens.iter())
-        .map(|(o, t)| {
-            o.is_some_and(|p| inside_any_body(&define_bodies, p))
-                && !inside_any_body(&pp_define_ranges, t.offset)
-        })
-        .collect();
-
+    let token_offsets: Vec<usize> = tokens.iter().map(|t| t.offset).collect();
     let mut run_at_start: HashMap<usize, MacroRun> = HashMap::new();
-    let mut skip_tok: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut skip_tok: HashSet<usize> = HashSet::new();
 
-    let mut i = 0;
-    while i < tokens.len() {
-        if !in_macro[i] {
-            i += 1;
+    for d in parsed.tree.directives() {
+        if d.kind != DirectiveKind::MacroUsage {
             continue;
         }
-        // Extend the run while we keep seeing macro-origin tokens.
-        let start = i;
-        let mut end = i;
-        while end + 1 < tokens.len() && in_macro[end + 1] {
-            end += 1;
-        }
-        // Find the call-site span in `parsed.original` from the
-        // previous non-macro token's original end to the next
-        // non-macro token's original start.
-        let prev_end = if start == 0 {
-            0
-        } else {
-            origins[start - 1]
-                .map(|o| o + tokens[start - 1].len)
-                .unwrap_or(0)
+        let DirectiveDetail::MacroUsage(ref usage) = d.detail else {
+            continue;
         };
-        let next_start = if end + 1 >= tokens.len() {
-            parsed.original.len()
-        } else {
-            origins[end + 1].unwrap_or(parsed.original.len())
+        let Some(pp) = d.pp_range else {
+            // Bodyless macro (`\`define EMPTY`) — nothing in the post-pp
+            // stream to skip. Leaving the call site out is the legacy
+            // behavior; preserving it is a follow-up.
+            continue;
         };
-        if prev_end < next_start {
-            let raw = &parsed.original[prev_end..next_start];
-            // Trim leading and trailing whitespace; the trivia between
-            // the surrounding tokens is reproduced separately by the
-            // trivia path (it lives in `parsed.text`).
-            let call_text = raw.trim().to_owned();
-            if !call_text.is_empty() {
-                for k in (start + 1)..=end {
-                    skip_tok.insert(k);
-                }
-                run_at_start.insert(
-                    start,
-                    MacroRun {
-                        start,
-                        end,
-                        call_text,
-                    },
-                );
-            }
+        let start_idx = token_offsets.partition_point(|&o| o < pp.begin);
+        if start_idx >= tokens.len() {
+            continue;
         }
-        i = end + 1;
+        if tokens[start_idx].offset >= pp.end {
+            continue;
+        }
+        let mut end_idx = start_idx;
+        while end_idx + 1 < tokens.len() && tokens[end_idx + 1].offset < pp.end {
+            end_idx += 1;
+        }
+        // Nested usages: a tighter (inner) run may already occupy these
+        // indices. Outer macros are recorded after their inner ones in
+        // the visitation order sv-parser-pp uses, so the outer's wider
+        // run reaches here second and overwrites — which is what we
+        // want, since we re-emit the outer call-site text and skip
+        // everything inside.
+        for k in (start_idx + 1)..=end_idx {
+            skip_tok.insert(k);
+        }
+        // Whoever wins start_idx owns the run. If a nested usage and
+        // its outer share start_idx (the inner is the first token of
+        // the outer's expansion) the outer's call_text replaces the
+        // inner's — desired.
+        run_at_start.insert(
+            start_idx,
+            MacroRun {
+                start: start_idx,
+                end: end_idx,
+                call_text: usage.call_text.clone(),
+            },
+        );
     }
 
     MacroCallInfo {
         run_at_start,
         skip_tok,
     }
-}
-
-/// Byte ranges of `` `define ... `` lines in `parsed.text` (post-pp).
-/// sv-parser preserves the verbatim directive, so these ranges cover
-/// the tokens that ARE the directive (not an expansion of it).
-fn scan_define_lines_pp(src: &str) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
-    let bytes = src.as_bytes();
-    let mut line_start: usize = 0;
-    let mut i: usize = 0;
-    while i <= bytes.len() {
-        let end_of_line = i == bytes.len() || bytes[i] == b'\n';
-        if end_of_line {
-            let line = &src[line_start..i];
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("`define")
-                && trimmed[7..]
-                    .chars()
-                    .next()
-                    .is_some_and(char::is_whitespace)
-            {
-                out.push((line_start, i));
-            }
-            line_start = i + 1;
-        }
-        i += 1;
-    }
-    out
-}
-
-/// Byte ranges in the original source that fall inside the body of a
-/// `` `define ID(args) body `` directive. We stop at the line end (no
-/// continuation handling for v0.1 — line-continuation backslashes are
-/// not common in the bodies we need to detect).
-fn scan_define_bodies(src: &str) -> Vec<(usize, usize)> {
-    let mut out = Vec::new();
-    let bytes = src.as_bytes();
-    let mut line_start: usize = 0;
-    let mut i: usize = 0;
-    while i <= bytes.len() {
-        let end_of_line = i == bytes.len() || bytes[i] == b'\n';
-        if end_of_line {
-            consider_define(src, line_start, i, &mut out);
-            line_start = i + 1;
-        }
-        i += 1;
-    }
-    out
-}
-
-fn consider_define(src: &str, start: usize, end: usize, out: &mut Vec<(usize, usize)>) {
-    let line = &src[start..end];
-    let trimmed = line.trim_start();
-    let lead_ws = line.len() - trimmed.len();
-    let Some(rest) = trimmed.strip_prefix("`define") else {
-        return;
-    };
-    if !rest.starts_with(|c: char| c.is_ascii_whitespace()) {
-        return;
-    }
-    let after_kw = rest.trim_start();
-    // Skip the macro name.
-    let name_end = after_kw
-        .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-        .unwrap_or(after_kw.len());
-    if name_end == 0 {
-        return;
-    }
-    let after_name = &after_kw[name_end..];
-    // Optional argument list `(...)`. Otherwise body starts after
-    // whitespace.
-    let after_args = if after_name.starts_with('(') {
-        // Find matching `)`. Macros generally don't nest parens in
-        // their argument list.
-        let depth_close = after_name.find(')');
-        match depth_close {
-            Some(idx) => &after_name[idx + 1..],
-            None => return,
-        }
-    } else {
-        after_name
-    };
-    let body = after_args.trim_start();
-    if body.is_empty() {
-        return;
-    }
-    // Compute byte offsets of `body` inside `src`.
-    let body_offset_in_line = lead_ws + (rest.len() - after_kw.len()) // `\`define` + first ws
-        + name_end
-        + (after_name.len() - after_args.len())
-        + (after_args.len() - body.len());
-    let body_start = start + body_offset_in_line;
-    out.push((body_start, end));
-}
-
-fn inside_any_body(bodies: &[(usize, usize)], pos: usize) -> bool {
-    bodies.iter().any(|&(s, e)| pos >= s && pos < e)
 }

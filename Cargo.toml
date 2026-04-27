@@ -44,6 +44,18 @@ simplelog = "0.12"
 tower-lsp = "0.20"
 tokio = { version = "1.6", features = ["io-std", "rt"] }
 
+[patch.crates-io]
+# Point sv-parser at our fork on the `master` branch. The fork carries
+# the additive `DirectiveSpan` API the formatter consumes
+# (https://github.com/KelvinChung2000/sv-parser, branch `directive-spans`
+# merged into `master`). All other family crates resolve via the fork's
+# in-tree path deps, so a single patch entry is enough.
+sv-parser = { git = "https://github.com/KelvinChung2000/sv-parser", branch = "master" }
+sv-parser-pp = { git = "https://github.com/KelvinChung2000/sv-parser", branch = "master" }
+sv-parser-syntaxtree = { git = "https://github.com/KelvinChung2000/sv-parser", branch = "master" }
+sv-parser-error = { git = "https://github.com/KelvinChung2000/sv-parser", branch = "master" }
+sv-parser-parser = { git = "https://github.com/KelvinChung2000/sv-parser", branch = "master" }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
