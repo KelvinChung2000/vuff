@@ -2,13 +2,12 @@
 //!
 //! `sv-parser` strips `` `ifdef / `ifndef / `elsif / `else / `endif ``
 //! entirely before handing tokens to the parser, so the CST never sees
-//! them. We reconstruct their byte ranges in the original source by
-//! inverting the pp→original mapping that [`vuff_sv_ast::Parsed`]
-//! exposes: bytes in the original that have no pp-counterpart belong to
-//! something the preprocessor consumed (directives, inactive branch
-//! bodies, expanded macro usages). Of those, we keep the lines that start
-//! with a directive keyword — the inactive-branch bodies were
-//! *intentionally* dropped and we must not re-emit them.
+//! them. We rescan the original source line by line and pick out every
+//! line whose trimmed content begins with one of those keywords — the
+//! preprocessor stripped them regardless of which branch was taken, so
+//! re-emitting every match in source order reconstructs the original
+//! conditional structure (active branch bodies remain in the CST and
+//! emit normally).
 //!
 //! Each kept directive is anchored to the CST token it should precede in
 //! the formatted output. [`format_token_range`] consults the anchor map
@@ -30,8 +29,7 @@ pub(crate) struct DirectiveAnchor {
 pub(crate) type DirectiveAnchors = Vec<DirectiveAnchor>;
 
 pub(crate) fn scan(parsed: &Parsed, tokens: &[Token<'_>]) -> DirectiveAnchors {
-    let covered = build_coverage(parsed);
-    let lines = find_directive_lines(&parsed.original, &covered);
+    let lines = find_directive_lines(&parsed.original);
     let token_orig_starts = compute_token_original_starts(parsed, tokens);
     let mut out: DirectiveAnchors = Vec::with_capacity(lines.len());
     for (orig_start, text) in lines {
@@ -44,25 +42,15 @@ pub(crate) fn scan(parsed: &Parsed, tokens: &[Token<'_>]) -> DirectiveAnchors {
     out
 }
 
-/// Build a bitmap over `parsed.original` where `covered[i]` is true iff
-/// some pp byte has origin `(original_path, i)`.
-fn build_coverage(parsed: &Parsed) -> Vec<bool> {
-    let mut covered = vec![false; parsed.original.len()];
-    let pp_len = parsed.text.len();
-    for pp_pos in 0..pp_len {
-        if let Some(orig) = parsed.origin_in_original(pp_pos) {
-            if orig < covered.len() {
-                covered[orig] = true;
-            }
-        }
-    }
-    covered
-}
-
-/// Scan original source line by line. Keep every line that is fully
-/// uncovered *and* starts with a preserved directive keyword. Return
-/// `(line_start_offset, trimmed_text)` pairs.
-fn find_directive_lines(src: &str, covered: &[bool]) -> Vec<(usize, String)> {
+/// Scan original source line by line. Keep every line whose trimmed
+/// content begins with a preserved directive keyword. We rely purely on
+/// the keyword pattern rather than the pp→original coverage map: the
+/// preprocessor strips these directives from the CST regardless of which
+/// branch is active, so re-splicing every matching line in original
+/// source order is the right thing. Lines containing other content
+/// alongside a directive (`logic a; `ifdef X`) are not handled — the
+/// pattern requires the trimmed line to start with `` ` ``.
+fn find_directive_lines(src: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     let bytes = src.as_bytes();
     let mut line_start: usize = 0;
@@ -70,7 +58,7 @@ fn find_directive_lines(src: &str, covered: &[bool]) -> Vec<(usize, String)> {
     while i <= bytes.len() {
         let end_of_line = i == bytes.len() || bytes[i] == b'\n';
         if end_of_line {
-            consider_line(src, covered, line_start, i, &mut out);
+            consider_line(src, line_start, i, &mut out);
             line_start = i + 1;
         }
         i += 1;
@@ -78,30 +66,11 @@ fn find_directive_lines(src: &str, covered: &[bool]) -> Vec<(usize, String)> {
     out
 }
 
-fn consider_line(
-    src: &str,
-    covered: &[bool],
-    start: usize,
-    end: usize,
-    out: &mut Vec<(usize, String)>,
-) {
+fn consider_line(src: &str, start: usize, end: usize, out: &mut Vec<(usize, String)>) {
     let line = &src[start..end];
     let trimmed = line.trim();
     if !is_preserved_directive(trimmed) {
         return;
-    }
-    // Every non-whitespace byte on this line must be uncovered; otherwise
-    // the line is shared with CST content (e.g. `logic a; `ifdef X` on
-    // the same line — not a pattern worth handling in the MVP).
-    let bytes = line.as_bytes();
-    for (off, b) in bytes.iter().enumerate() {
-        if b.is_ascii_whitespace() {
-            continue;
-        }
-        let idx = start + off;
-        if idx < covered.len() && covered[idx] {
-            return;
-        }
     }
     out.push((start, trimmed.to_owned()));
 }
