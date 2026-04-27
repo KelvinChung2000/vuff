@@ -12,7 +12,7 @@ use std::borrow::Cow;
 
 use vuff_config::{FormatOptions, IndentStyle};
 use vuff_formatter::{FormatElement, PrintOptions};
-use vuff_sv_ast::{SyntaxTree, Token};
+use vuff_sv_ast::{Parsed, SyntaxTree, Token};
 
 use crate::directives::DirectiveAnchors;
 
@@ -25,22 +25,23 @@ pub(crate) struct FormatCtx<'a> {
     #[allow(dead_code)] // wired for future per-node dispatch (step 3+)
     pub(crate) tree: &'a SyntaxTree,
     pub(crate) directive_anchors: &'a DirectiveAnchors,
+    pub(crate) parsed: &'a Parsed,
 }
 
 impl<'a> FormatCtx<'a> {
     pub(crate) fn new(
         opts: &'a FormatOptions,
-        source: &'a str,
+        parsed: &'a Parsed,
         tokens: &'a [Token<'a>],
-        tree: &'a SyntaxTree,
         directive_anchors: &'a DirectiveAnchors,
     ) -> Self {
         Self {
             opts,
-            source,
+            source: &parsed.text,
             tokens,
-            tree,
+            tree: &parsed.tree,
             directive_anchors,
+            parsed,
         }
     }
 }

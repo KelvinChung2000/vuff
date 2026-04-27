@@ -174,7 +174,7 @@ fn emit_trivia_with_comments(f: &mut Formatter, slice: &str, is_leading: bool) -
 /// Scan a single physical line and return the block-comment state after
 /// it. Handles multiple opens/closes on one line; a `//` starts a line
 /// comment that extinguishes any remaining `/*` on that line.
-fn block_state_after(mut in_block: bool, line: &str) -> bool {
+pub(crate) fn block_state_after(mut in_block: bool, line: &str) -> bool {
     let bytes = line.as_bytes();
     let mut i = 0;
     while i + 1 < bytes.len() {

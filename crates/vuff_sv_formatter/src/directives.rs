@@ -16,12 +16,16 @@
 use vuff_sv_ast::{Parsed, Token};
 
 /// One preserved directive line, pre-stripped of trailing whitespace.
-/// Stored with the token index it should be emitted *before*. Directives
-/// whose anchor would be past the last token get `anchor = tokens.len()`
-/// and are emitted by the root rule after the final token.
+/// Stored with the token index it should be emitted *before* and the
+/// directive's byte offset in the *original* source — used by the
+/// emission path to interleave directives with comments / active
+/// `\`define`s in original source order. Directives whose anchor would
+/// be past the last token get `anchor = tokens.len()` and are emitted by
+/// the root rule after the final token.
 #[derive(Clone, Debug)]
 pub(crate) struct DirectiveAnchor {
     pub(crate) anchor_tok: usize,
+    pub(crate) orig_start: usize,
     pub(crate) text: String,
 }
 
@@ -36,6 +40,7 @@ pub(crate) fn scan(parsed: &Parsed, tokens: &[Token<'_>]) -> DirectiveAnchors {
         let anchor = anchor_for(&token_orig_starts, orig_start);
         out.push(DirectiveAnchor {
             anchor_tok: anchor,
+            orig_start,
             text,
         });
     }

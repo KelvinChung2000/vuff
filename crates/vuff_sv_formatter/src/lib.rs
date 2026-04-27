@@ -57,7 +57,7 @@ pub fn format_source(src: &str, opts: &FormatOptions) -> Result<String, FormatEr
 
     let toks = tokens(&parsed.tree);
     let directive_anchors = directives::scan(&parsed, &toks);
-    let ctx = FormatCtx::new(opts, &parsed.text, &toks, &parsed.tree, &directive_anchors);
+    let ctx = FormatCtx::new(opts, &parsed, &toks, &directive_anchors);
     let mut f = Formatter::new(opts, toks.len() * 2 + 4);
     SourceTextRoot.fmt(&ctx, &mut f);
 

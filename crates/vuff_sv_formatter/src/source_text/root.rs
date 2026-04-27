@@ -35,10 +35,20 @@ impl Format for SourceTextRoot {
         }
 
         // File-leading trivia (comments, blank lines before the first token).
-        emit_trivia(f, &ctx.source[..ctx.tokens[0].offset], true);
+        // When no directives anchor to token 0, emit the leading region
+        // here. Otherwise leave it to `dispatch` (it will pass
+        // `leading_from = 0` so `format_token_range`'s directive-aware
+        // path handles the leading trivia and directives together).
+        let has_leading_dirs = ctx
+            .directive_anchors
+            .iter()
+            .any(|a| a.anchor_tok == 0);
+        if !has_leading_dirs {
+            emit_trivia(f, &ctx.source[..ctx.tokens[0].offset], true);
+        }
 
         let spans = find_module_spans(ctx.tree, ctx.tokens);
-        dispatch(ctx, f, &spans, n);
+        dispatch(ctx, f, &spans, n, has_leading_dirs);
 
         // File-trailing trivia past the last token.
         let last_end = ctx.tokens[n - 1].end();
@@ -68,11 +78,24 @@ impl Format for SourceTextRoot {
     }
 }
 
-fn dispatch(ctx: &FormatCtx<'_>, f: &mut Formatter, spans: &[ModuleSpan], n: usize) {
+fn dispatch(
+    ctx: &FormatCtx<'_>,
+    f: &mut Formatter,
+    spans: &[ModuleSpan],
+    n: usize,
+    has_leading_dirs: bool,
+) {
     let mut cursor_tok: usize = 0;
-    let mut cursor_byte: usize = ctx.tokens[0].offset;
+    // When directives anchor to token 0, root left the file-leading
+    // trivia unwritten so `format_token_range` can interleave it with
+    // those directives. Start the byte cursor at BOF in that case.
+    let mut cursor_byte: usize = if has_leading_dirs {
+        0
+    } else {
+        ctx.tokens[0].offset
+    };
 
-    for span in spans {
+    for (i, span) in spans.iter().enumerate() {
         let trivia_start = if span.start > cursor_tok {
             // Non-module tokens in the gap before this module: verbatim.
             format_token_range(ctx, f, cursor_tok..span.start, cursor_byte);
@@ -85,15 +108,30 @@ fn dispatch(ctx: &FormatCtx<'_>, f: &mut Formatter, spans: &[ModuleSpan], n: usi
         // is meaningless — clear it so the pre-module trivia's indent
         // doesn't get bumped an extra level.
         f.in_statement = false;
-        // Emit the pre-module trivia (blank lines / free comments between
-        // modules) *before* the module rule runs. This lets the rule's
-        // optional directive prepend land on its own line without relying
-        // on internal leading-trivia handoff.
-        let first_offset = ctx.tokens[span.start].offset;
-        emit_trivia(f, &ctx.source[trivia_start..first_offset], false);
+        // Hand the pre-module trivia to the module rule's first
+        // `format_token_range` call (via `leading_from`) only when
+        // stripped conditional directives anchor to the module's first
+        // token — that's the case where directives need to interleave
+        // with comments in original-source order. Otherwise emit the
+        // trivia here, which keeps the standalone path identical to its
+        // pre-fix behavior (e.g. so an inserted `\`default_nettype none`
+        // prepend lands after the inter-module blank line).
+        let span_has_dirs = ctx
+            .directive_anchors
+            .iter()
+            .any(|a| a.anchor_tok == span.start);
+        let leading_from = if i == 0 && has_leading_dirs && span.start == 0 {
+            0
+        } else if span_has_dirs {
+            trivia_start
+        } else {
+            let first_offset = ctx.tokens[span.start].offset;
+            emit_trivia(f, &ctx.source[trivia_start..first_offset], false);
+            first_offset
+        };
         ModuleDeclarationRule {
             span: *span,
-            leading_from: first_offset,
+            leading_from,
         }
         .fmt(ctx, f);
         cursor_tok = span.end + 1;

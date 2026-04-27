@@ -32,32 +32,158 @@ use crate::list::{
 use crate::stmt::control_header_paren_mask;
 use crate::stmt::seq_block::wants_allman_break;
 use crate::stmt::{statement_boundary_mask, statement_reset_mask};
+use crate::directives::DirectiveAnchor;
 use crate::tokens::delimiters::{is_closer, is_opener};
 use crate::tokens::spacing::{force_space_between, no_space_between};
-use crate::tokens::trivia::emit_trivia_at;
+use crate::tokens::trivia::{block_state_after, emit_trivia_at};
 
-fn emit_directives_around(f: &mut Formatter, _between: &str, dirs: &[&str], tail_depth: u32) {
-    // Directives always live on their own line at column 0. If prior
-    // emission already ended in a hardline (e.g. inter-description trivia
-    // from the root rule), don't add another — it would create a stray
-    // blank line.
-    if !matches!(
-        f.out.last(),
-        Some(FormatElement::HardLine | FormatElement::EmptyLine)
-    ) {
+/// Emit a span of inter-token trivia that contains stripped preprocessor
+/// directives. We can't just dump the directive lines and ignore the
+/// `between` slice — that would drop comments and active `\`define` lines
+/// that the preprocessor preserved in `parsed.text`. Instead, walk both
+/// inputs (the directive list and `between`'s non-blank lines) tagged
+/// with their byte offset in `parsed.original`, sort by that offset, and
+/// emit in original-source order.
+///
+/// `body_depth` is the indent for re-emitted comment / `\`define` lines;
+/// directive keywords always print at column 0. `tail_depth` is the
+/// indent used for the upcoming CST token.
+pub(crate) fn emit_directives_around(
+    ctx: &FormatCtx<'_>,
+    f: &mut Formatter,
+    between: &str,
+    between_offset: usize,
+    dirs: &[&DirectiveAnchor],
+    body_depth: u32,
+    tail_depth: u32,
+) {
+    enum Kind {
+        Directive,
+        Content,
+        Blank,
+    }
+    let mut events: Vec<(usize, usize, Kind, String)> = Vec::new();
+
+    for d in dirs {
+        events.push((d.orig_start, 0, Kind::Directive, d.text.clone()));
+    }
+
+    // Walk `between` (post-pp) line by line. Non-blank lines are emitted
+    // at `body_depth`; runs of blank lines collapse to at most one.
+    let mut pp_pos = between_offset;
+    let mut in_block = false;
+    let mut last_content_orig: Option<usize> = None;
+    let mut pending_blank = false;
+    let mut idx_seq: usize = 0;
+    for raw in between.split_inclusive('\n') {
+        let line_pp_start = pp_pos;
+        pp_pos += raw.len();
+        let line = raw
+            .trim_end_matches('\n')
+            .trim_end_matches([' ', '\t']);
+        let trimmed = line.trim_start_matches([' ', '\t']);
+        let was_in_block = in_block;
+        in_block = block_state_after(in_block, line);
+
+        if trimmed.is_empty() {
+            if last_content_orig.is_some() {
+                pending_blank = true;
+            }
+            continue;
+        }
+
+        let leading_ws = line.bytes().take_while(|&b| b == b' ' || b == b'\t').count();
+        // If origin lookup fails (the line came from a macro expansion or
+        // an `\`include`), fall back to "after every directive in this
+        // batch" — better to land at the end than at column 0 ahead of
+        // unrelated directives.
+        let orig = ctx
+            .parsed
+            .origin_in_original(line_pp_start + leading_ws)
+            .unwrap_or(usize::MAX);
+        let text = if was_in_block {
+            line.to_owned()
+        } else {
+            trimmed.to_owned()
+        };
+        if pending_blank {
+            idx_seq += 1;
+            events.push((orig.saturating_sub(1), idx_seq, Kind::Blank, String::new()));
+            pending_blank = false;
+        }
+        idx_seq += 1;
+        events.push((orig, idx_seq, Kind::Content, text));
+        last_content_orig = Some(orig);
+    }
+
+    // Sort by orig pos with `idx_seq` as tie-breaker so equal-pos events
+    // keep the order they were inserted (directives before content when a
+    // directive's recorded orig_start coincides with a content line).
+    events.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
+    // Make sure we start on a fresh line — but only if anything has
+    // been emitted yet. At file start the buffer is empty and adding a
+    // hardline would inject a stray leading blank line.
+    if !f.out.is_empty()
+        && !matches!(
+            f.out.last(),
+            Some(FormatElement::HardLine | FormatElement::EmptyLine)
+        )
+    {
         f.push_hardline();
     }
-    for (i, dir) in dirs.iter().enumerate() {
-        f.push_text((*dir).to_owned());
-        if i + 1 < dirs.len() {
-            f.push_hardline();
+
+    let saved_depth = f.depth;
+    let saved_in_stmt = f.in_statement;
+    // Comments / `\`define` lines stand outside any in-progress statement;
+    // suppress continuation-indent for the entire emitted block,
+    // including the trailing indent for the upcoming token. The
+    // upcoming token starts on its own line at `tail_depth` — adding
+    // continuation indent here would over-shift it.
+    f.in_statement = false;
+    let mut emitted = false;
+    let mut blank_pending = false;
+    for (_, _, kind, text) in events {
+        match kind {
+            Kind::Blank => {
+                if emitted {
+                    blank_pending = true;
+                }
+            }
+            Kind::Directive => {
+                if emitted {
+                    f.push_hardline();
+                    if blank_pending {
+                        f.push_hardline();
+                    }
+                }
+                blank_pending = false;
+                f.push_text(text);
+                emitted = true;
+            }
+            Kind::Content => {
+                if emitted {
+                    f.push_hardline();
+                    if blank_pending {
+                        f.push_hardline();
+                    }
+                }
+                blank_pending = false;
+                f.depth = body_depth;
+                f.push_indent_for_new_line();
+                f.push_text(text);
+                emitted = true;
+            }
         }
     }
-    f.push_hardline();
-    let saved = f.depth;
+
+    if emitted {
+        f.push_hardline();
+    }
     f.depth = tail_depth;
     f.push_indent_for_new_line();
-    f.depth = saved;
+    f.depth = saved_depth;
+    f.in_statement = saved_in_stmt;
 }
 
 // This function is intentionally long: it's the transitional engine
@@ -237,18 +363,24 @@ pub(crate) fn format_token_range(
             forbids_space = true;
         }
 
-        // If stripped directive lines anchor to this token, replace the
-        // normal trivia emission with: source newline(s) → directive
-        // lines at column 0 → indent for the upcoming token.
-        let dirs: Vec<&str> = ctx
+        // If stripped directive lines anchor to this token, fold them
+        // into the trivia emission: directives and any preserved
+        // comment / `\`define` lines from `between` are interleaved by
+        // their original-source position, so the file's source order
+        // round-trips even when conditional directives were stripped.
+        let dirs: Vec<&DirectiveAnchor> = ctx
             .directive_anchors
             .iter()
             .filter(|a| a.anchor_tok == global_i)
-            .map(|a| a.text.as_str())
             .collect();
 
         if !dirs.is_empty() {
-            emit_directives_around(f, between, &dirs, curr_depth);
+            // Use `curr_depth` (the upcoming token's depth) as the body
+            // indent for re-emitted comments / active `\`define`s.
+            // `trivia_depth` would carry over the previous token's deeper
+            // depth, which over-indents top-level content sitting between
+            // a closing punctuation and the next description.
+            emit_directives_around(ctx, f, between, cursor, &dirs, curr_depth, curr_depth);
         } else if prev_was_wrap_open {
             // First token after a newline-triggered wrap opener: force a
             // hardline + indent at the new (deeper) wrap level, ignoring
