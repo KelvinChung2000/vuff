@@ -15,7 +15,22 @@ use vuff_config::{FormatOptions, IndentStyle};
 use vuff_formatter::{FormatElement, PrintOptions};
 use vuff_sv_ast::{Parsed, SyntaxTree, Token};
 
+use crate::attribute::spans::{find_attribute_spans, AttributeSpan};
 use crate::directives::DirectiveAnchors;
+use crate::expr::{
+    apostrophe_brace_mask, call_open_paren_mask, concat_brace_masks, select_open_bracket_mask,
+    streaming_concat_mask, ternary_colon_mask,
+};
+use crate::indent_map::cst_depth_map;
+use crate::list::inst_port_list::{collect_inst_port_lists, InstPortList};
+use crate::list::param_port_list::{collect_param_port_lists, ParamPortList};
+use crate::list::port_align::{collect_port_lists, PortList};
+use crate::list::wrap_mask::wrap_delimiter_masks;
+use crate::list::{
+    force_space_before_instance_paren_mask, force_space_before_port_paren_mask,
+    param_assign_pound_mask,
+};
+use crate::stmt::{control_header_paren_mask, statement_boundary_mask, statement_reset_mask};
 
 /// Reverse index from a token's preprocessed-source byte offset to its
 /// position in the flat token list. The CST visitor surfaces every
@@ -33,6 +48,89 @@ pub(crate) fn build_token_index(tokens: &[Token<'_>]) -> TokenIndex {
         .collect()
 }
 
+/// Cached CST-driven masks. Each field used to be rebuilt on every
+/// `format_token_range` call; we now compute them once per file and
+/// share via [`FormatCtx`]. The verbatim engine is the only consumer.
+pub(crate) struct FormatCtxMasks {
+    pub(crate) attr_spans: Vec<AttributeSpan>,
+    pub(crate) port_paren: Vec<bool>,
+    pub(crate) instance_paren: Vec<bool>,
+    pub(crate) param_pound: Vec<bool>,
+    pub(crate) is_ternary_colon: Vec<bool>,
+    pub(crate) concat_open: Vec<bool>,
+    pub(crate) concat_close: Vec<bool>,
+    pub(crate) concat_before_open: Vec<bool>,
+    pub(crate) apostrophe_brace: Vec<bool>,
+    pub(crate) control_paren: Vec<bool>,
+    pub(crate) select_bracket: Vec<bool>,
+    pub(crate) call_paren: Vec<bool>,
+    pub(crate) in_streaming: Vec<bool>,
+    pub(crate) is_stmt_boundary: Vec<bool>,
+    pub(crate) is_stmt_reset: Vec<bool>,
+    pub(crate) cst_depth: Vec<u32>,
+    pub(crate) inst_port_lists: Vec<InstPortList>,
+    pub(crate) param_port_lists: Vec<ParamPortList>,
+    pub(crate) port_lists: Vec<PortList>,
+    pub(crate) wrap_open: Vec<bool>,
+    pub(crate) wrap_close: Vec<bool>,
+}
+
+impl FormatCtxMasks {
+    pub(crate) fn build(tree: &SyntaxTree, tokens: &[Token<'_>], source: &str) -> Self {
+        let attr_spans = find_attribute_spans(tree, source, tokens);
+        let port_paren = force_space_before_port_paren_mask(tree, tokens);
+        let instance_paren = force_space_before_instance_paren_mask(tree, tokens);
+        let param_pound = param_assign_pound_mask(tree, tokens);
+        let is_ternary_colon = ternary_colon_mask(tree, tokens);
+        let (concat_open, concat_close, concat_before_open) = concat_brace_masks(tree, tokens);
+        let apostrophe_brace = apostrophe_brace_mask(tree, tokens);
+        let control_paren = control_header_paren_mask(tree, tokens);
+        let select_bracket = select_open_bracket_mask(tree, tokens);
+        let call_paren = call_open_paren_mask(tree, tokens);
+        let in_streaming = streaming_concat_mask(tree, tokens);
+        let is_stmt_boundary = statement_boundary_mask(tree, tokens);
+        let is_stmt_reset = statement_reset_mask(tree, tokens);
+        let cst_depth = cst_depth_map(tree, tokens);
+        let inst_port_lists = collect_inst_port_lists(tree, tokens, source);
+        let param_port_lists = collect_param_port_lists(tree, tokens, source);
+        let port_lists = collect_port_lists(tree, tokens, source);
+        let mut excluded: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for l in &inst_port_lists {
+            excluded.insert(l.paren_open);
+        }
+        for l in &param_port_lists {
+            excluded.insert(l.paren_open);
+        }
+        for l in &port_lists {
+            excluded.insert(l.paren_open);
+        }
+        let (wrap_open, wrap_close) = wrap_delimiter_masks(tokens, source, &excluded);
+        Self {
+            attr_spans,
+            port_paren,
+            instance_paren,
+            param_pound,
+            is_ternary_colon,
+            concat_open,
+            concat_close,
+            concat_before_open,
+            apostrophe_brace,
+            control_paren,
+            select_bracket,
+            call_paren,
+            in_streaming,
+            is_stmt_boundary,
+            is_stmt_reset,
+            cst_depth,
+            inst_port_lists,
+            param_port_lists,
+            port_lists,
+            wrap_open,
+            wrap_close,
+        }
+    }
+}
+
 /// Read-only state shared by every formatter rule. Cheap to pass by
 /// reference; does not own any of its pointees.
 pub(crate) struct FormatCtx<'a> {
@@ -43,6 +141,7 @@ pub(crate) struct FormatCtx<'a> {
     pub(crate) tree: &'a SyntaxTree,
     pub(crate) directive_anchors: &'a DirectiveAnchors,
     pub(crate) parsed: &'a Parsed,
+    pub(crate) masks: &'a FormatCtxMasks,
 }
 
 impl<'a> FormatCtx<'a> {
@@ -51,6 +150,7 @@ impl<'a> FormatCtx<'a> {
         parsed: &'a Parsed,
         tokens: &'a [Token<'a>],
         directive_anchors: &'a DirectiveAnchors,
+        masks: &'a FormatCtxMasks,
     ) -> Self {
         Self {
             opts,
@@ -59,6 +159,7 @@ impl<'a> FormatCtx<'a> {
             tree: &parsed.tree,
             directive_anchors,
             parsed,
+            masks,
         }
     }
 }

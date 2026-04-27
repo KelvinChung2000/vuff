@@ -38,7 +38,7 @@ use vuff_config::FormatOptions;
 use vuff_formatter::print;
 use vuff_sv_ast::{assert_roundtrip, parse, tokens};
 
-use crate::context::{print_options_from, FormatCtx, Formatter};
+use crate::context::{print_options_from, FormatCtx, FormatCtxMasks, Formatter};
 use crate::format_ext::Format;
 use crate::source_text::SourceTextRoot;
 
@@ -57,7 +57,8 @@ pub fn format_source(src: &str, opts: &FormatOptions) -> Result<String, FormatEr
 
     let toks = tokens(&parsed.tree);
     let directive_anchors = directives::scan(&parsed, &toks);
-    let ctx = FormatCtx::new(opts, &parsed, &toks, &directive_anchors);
+    let masks = FormatCtxMasks::build(&parsed.tree, &toks, &parsed.text);
+    let ctx = FormatCtx::new(opts, &parsed, &toks, &directive_anchors, &masks);
     let mut f = Formatter::new(opts, toks.len() * 2 + 4);
     SourceTextRoot.fmt(&ctx, &mut f);
 

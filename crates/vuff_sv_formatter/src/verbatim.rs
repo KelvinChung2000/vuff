@@ -17,21 +17,10 @@ use std::ops::Range;
 
 use vuff_formatter::FormatElement;
 
-use crate::attribute::{find_attribute_spans, force_nl_before_mask};
+use crate::attribute::force_nl_before_mask;
 use crate::context::{FormatCtx, Formatter};
-use crate::expr::{
-    apostrophe_brace_mask, call_open_paren_mask, concat_brace_masks, select_open_bracket_mask,
-    streaming_concat_mask, ternary_colon_mask,
-};
-use crate::indent_map::cst_depth_map;
-use crate::list::{
-    collect_inst_port_lists, collect_param_port_lists, collect_port_lists,
-    force_space_before_instance_paren_mask, force_space_before_port_paren_mask,
-    param_assign_pound_mask, render_wrapped, wrap_delimiter_masks,
-};
-use crate::stmt::control_header_paren_mask;
+use crate::list::render_wrapped;
 use crate::stmt::seq_block::wants_allman_break;
-use crate::stmt::{statement_boundary_mask, statement_reset_mask};
 use crate::directives::DirectiveAnchor;
 use crate::tokens::delimiters::{is_closer, is_opener};
 use crate::tokens::spacing::{force_space_between, no_space_between};
@@ -204,23 +193,26 @@ pub(crate) fn format_token_range(
     let src = ctx.source;
     let opts = ctx.opts;
 
-    // CST-driven attribute span detection → force_nl_before mask.
-    let attr_spans = find_attribute_spans(ctx.tree, src, ctx.tokens);
-    let force_nl_before = force_nl_before_mask(&attr_spans, ctx.tokens.len());
-    let port_paren = force_space_before_port_paren_mask(ctx.tree, ctx.tokens);
-    let instance_paren = force_space_before_instance_paren_mask(ctx.tree, ctx.tokens);
-    let param_pound = param_assign_pound_mask(ctx.tree, ctx.tokens);
-    let is_ternary_colon = ternary_colon_mask(ctx.tree, ctx.tokens);
-    let (concat_open, concat_close, concat_before_open) = concat_brace_masks(ctx.tree, ctx.tokens);
-    let apostrophe_brace = apostrophe_brace_mask(ctx.tree, ctx.tokens);
-    let control_paren = control_header_paren_mask(ctx.tree, ctx.tokens);
-    let select_bracket = select_open_bracket_mask(ctx.tree, ctx.tokens);
-    let call_paren = call_open_paren_mask(ctx.tree, ctx.tokens);
-    let in_streaming = streaming_concat_mask(ctx.tree, ctx.tokens);
-    let is_stmt_boundary = statement_boundary_mask(ctx.tree, ctx.tokens);
-    let is_stmt_reset = statement_reset_mask(ctx.tree, ctx.tokens);
-    let cst_depth = cst_depth_map(ctx.tree, ctx.tokens);
-    let inst_port_lists = collect_inst_port_lists(ctx.tree, ctx.tokens, ctx.source);
+    // All CST-driven masks were built once in `format_source` and live in
+    // `ctx.masks`. Bind locals so the rest of the body reads naturally.
+    let m = ctx.masks;
+    let force_nl_before = force_nl_before_mask(&m.attr_spans, ctx.tokens.len());
+    let port_paren = m.port_paren.as_slice();
+    let instance_paren = m.instance_paren.as_slice();
+    let param_pound = m.param_pound.as_slice();
+    let is_ternary_colon = m.is_ternary_colon.as_slice();
+    let concat_open = m.concat_open.as_slice();
+    let concat_close = m.concat_close.as_slice();
+    let concat_before_open = m.concat_before_open.as_slice();
+    let apostrophe_brace = m.apostrophe_brace.as_slice();
+    let control_paren = m.control_paren.as_slice();
+    let select_bracket = m.select_bracket.as_slice();
+    let call_paren = m.call_paren.as_slice();
+    let in_streaming = m.in_streaming.as_slice();
+    let is_stmt_boundary = m.is_stmt_boundary.as_slice();
+    let is_stmt_reset = m.is_stmt_reset.as_slice();
+    let cst_depth = m.cst_depth.as_slice();
+    let inst_port_lists = &m.inst_port_lists;
     // Map from `(` token index → the inst-port list it opens. Used to splice
     // a wrapped renderer in mid-stream when the user has inserted a newline
     // inside the `(...)` (the canonical "wrap me" signal).
@@ -228,21 +220,8 @@ pub(crate) fn format_token_range(
         usize,
         &crate::list::inst_port_list::InstPortList,
     > = inst_port_lists.iter().map(|l| (l.paren_open, l)).collect();
-
-    // Generic newline-trigger wrap for any other delimited group. Excludes
-    // openers already owned by the inst/param/port-list renderers so their
-    // dedicated logic owns the canonical shape.
-    let mut excluded_openers: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    for l in &inst_port_lists {
-        excluded_openers.insert(l.paren_open);
-    }
-    for l in collect_param_port_lists(ctx.tree, ctx.tokens, ctx.source) {
-        excluded_openers.insert(l.paren_open);
-    }
-    for l in collect_port_lists(ctx.tree, ctx.tokens, ctx.source) {
-        excluded_openers.insert(l.paren_open);
-    }
-    let (wrap_open, wrap_close) = wrap_delimiter_masks(ctx.tokens, ctx.source, &excluded_openers);
+    let wrap_open = m.wrap_open.as_slice();
+    let wrap_close = m.wrap_close.as_slice();
 
     let first_global_idx = range.start;
     let mut cursor: usize = leading_from;

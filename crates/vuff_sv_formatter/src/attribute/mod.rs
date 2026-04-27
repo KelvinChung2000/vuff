@@ -3,4 +3,4 @@
 
 pub(crate) mod spans;
 
-pub(crate) use spans::{find_attribute_spans, force_nl_before_mask};
+pub(crate) use spans::force_nl_before_mask;
