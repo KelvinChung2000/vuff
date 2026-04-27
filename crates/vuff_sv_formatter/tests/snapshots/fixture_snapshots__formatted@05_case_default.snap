@@ -1,13 +1,9 @@
 ---
 source: crates/vuff_sv_formatter/tests/fixture_snapshots.rs
-assertion_line: 48
 expression: formatted
 input_file: tests/fixtures/05_case_default/input.sv
 ---
-module a (
-  input  wire  [1:0] sel,
-  output logic       q
-);
+module a (input wire [1:0] sel, output logic q);
   always_comb begin
     case (sel)
       2'd0: q = 1'b0;

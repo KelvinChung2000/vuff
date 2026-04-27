@@ -3,7 +3,9 @@
 
 pub(crate) mod boundaries;
 pub(crate) mod control_paren;
+pub(crate) mod reset_mask;
 pub(crate) mod seq_block;
 
 pub(crate) use boundaries::statement_boundary_mask;
 pub(crate) use control_paren::control_header_paren_mask;
+pub(crate) use reset_mask::statement_reset_mask;

@@ -1,5 +1,15 @@
-//! Keyword and punctuation tables that classify tokens by their layout
-//! role. Pure data — no state, no context dependency.
+//! Punctuation tables that classify tokens by their bracket role. Pure
+//! data — no state, no context dependency.
+//!
+//! All keyword block openers / closers (`begin`, `end`, `module`,
+//! `endmodule`, `function`, `endfunction`, `generate`, `endgenerate`,
+//! `case`, `endcase`, `fork`, `join*`, …) used to live here too, in a
+//! `resets_statement` table that the verbatim engine consulted to
+//! decide statement-continuation reset. That table has been migrated to
+//! `crate::stmt::reset_mask::statement_reset_mask`, which derives the
+//! same set from the CST so new SV constructs can't silently drift past
+//! it. What remains here is just the four bracket-pair punctuators —
+//! they have no CST node distinguishing them from "regular" `(` etc.
 
 /// Bracket pairs that open a nesting level. Tokens here contribute +1 to
 /// the verbatim token-depth state on emission.
@@ -17,41 +27,4 @@ pub(crate) fn is_opener(t: &str) -> bool {
 /// handled by the CST indent map.
 pub(crate) fn is_closer(t: &str) -> bool {
     matches!(t, ")" | "]" | "}" | "*)")
-}
-
-/// Tokens that terminate the "statement continuation" scope: after any of
-/// these, an intervening newline indents at the raw structural depth, not
-/// at depth+1.
-pub(crate) fn resets_statement(t: &str) -> bool {
-    matches!(
-        t,
-        ";" | "begin"
-            | "end"
-            | "endcase"
-            | "endmodule"
-            | "endinterface"
-            | "endfunction"
-            | "endtask"
-            | "endclass"
-            | "endpackage"
-            | "endgenerate"
-            | "endspecify"
-            | "endchecker"
-            | "endgroup"
-            | "endprimitive"
-            | "endconfig"
-            | "endprogram"
-            | "fork"
-            | "join"
-            | "join_any"
-            | "join_none"
-    )
-}
-
-/// Block keywords that may be followed by an optional `: label`. Used by
-/// the statement-continuation state machine to keep `in_statement = false`
-/// across the `: label` tail before the block body starts on the next
-/// line.
-pub(crate) fn allows_trailing_label(t: &str) -> bool {
-    resets_statement(t) && t != ";"
 }

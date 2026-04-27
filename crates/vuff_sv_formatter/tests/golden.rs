@@ -15,7 +15,7 @@
 
 use std::path::{Path, PathBuf};
 
-use vuff_config::{BeginStyle, FormatOptions, IndentStyle, PortListStyle, TrailingComma};
+use vuff_config::{BeginStyle, FormatOptions, IndentStyle};
 use vuff_sv_formatter::format_source;
 
 fn golden_dir() -> PathBuf {
@@ -148,20 +148,6 @@ fn apply_key(opts: &mut FormatOptions, key: &str, value: &str) -> Result<(), Str
                 "k_and_r" | "knr" => BeginStyle::KAndR,
                 "allman" => BeginStyle::Allman,
                 other => return Err(format!("begin_style: {other}")),
-            };
-        }
-        "port_list_style" => {
-            opts.port_list_style = match value {
-                "one_per_line" => PortListStyle::OnePerLine,
-                "compact" => PortListStyle::Compact,
-                other => return Err(format!("port_list_style: {other}")),
-            };
-        }
-        "trailing_comma" => {
-            opts.trailing_comma = match value {
-                "never" => TrailingComma::Never,
-                "multiline" => TrailingComma::Multiline,
-                other => return Err(format!("trailing_comma: {other}")),
             };
         }
         "wrap_default_nettype" => {

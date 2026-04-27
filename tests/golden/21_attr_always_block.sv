@@ -8,10 +8,7 @@ endcase
 end
 endmodule
 // expected -----
-module m (
-  input  wire  [1:0] sel,
-  output logic       q
-);
+module m (input wire [1:0] sel, output logic q);
   always_comb begin
     (* full_case, parallel_case *)
     case (sel)

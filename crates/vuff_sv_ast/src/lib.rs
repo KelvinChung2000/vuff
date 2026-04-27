@@ -12,8 +12,8 @@
 //! which is what sv-parser considers the source-of-truth.
 
 pub use sv_parser::{
-    ConditionalExpression, Locate, NodeEvent, PreprocessedText, RefNode, Statement, StatementItem,
-    StatementOrNull, SyntaxTree,
+    ConditionalExpression, FunctionStatementOrNull, Locate, NodeEvent, PreprocessedText, RefNode,
+    Statement, StatementItem, StatementOrNull, SyntaxTree,
 };
 
 use std::path::Path;

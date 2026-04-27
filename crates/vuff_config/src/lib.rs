@@ -20,20 +20,6 @@ pub enum BeginStyle {
     Allman,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PortListStyle {
-    OnePerLine,
-    Compact,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TrailingComma {
-    Never,
-    Multiline,
-}
-
 pub const CONFIG_FILE_NAME: &str = "vuff.toml";
 
 /// Raw on-disk shape of `vuff.toml`. Unknown sections (`[textrules]`,
@@ -61,8 +47,6 @@ pub struct OptionSection {
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct FormatSection {
     pub begin_style: Option<BeginStyle>,
-    pub port_list_style: Option<PortListStyle>,
-    pub trailing_comma: Option<TrailingComma>,
     pub wrap_default_nettype: Option<bool>,
     #[serde(flatten)]
     other: toml::Table,
@@ -75,8 +59,6 @@ pub struct FormatOptions {
     pub indent_width: u8,
     pub indent_style: IndentStyle,
     pub begin_style: BeginStyle,
-    pub port_list_style: PortListStyle,
-    pub trailing_comma: TrailingComma,
     /// When true, every `module … endmodule` gets wrapped with
     /// `` `default_nettype none `` above and `` `default_nettype wire ``
     /// below. Idempotent: if the directives are already present the
@@ -91,8 +73,6 @@ impl Default for FormatOptions {
             indent_width: 2,
             indent_style: IndentStyle::Spaces,
             begin_style: BeginStyle::KAndR,
-            port_list_style: PortListStyle::OnePerLine,
-            trailing_comma: TrailingComma::Multiline,
             wrap_default_nettype: false,
         }
     }
@@ -107,8 +87,6 @@ impl FormatOptions {
             indent_width: option.indent_width.unwrap_or(d.indent_width),
             indent_style: option.indent_style.unwrap_or(d.indent_style),
             begin_style: format.begin_style.unwrap_or(d.begin_style),
-            port_list_style: format.port_list_style.unwrap_or(d.port_list_style),
-            trailing_comma: format.trailing_comma.unwrap_or(d.trailing_comma),
             wrap_default_nettype: format
                 .wrap_default_nettype
                 .unwrap_or(d.wrap_default_nettype),

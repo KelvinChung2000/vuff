@@ -9,11 +9,7 @@ end
 end
 endmodule
 // expected -----
-module m (
-  input  wire  a,
-  input  wire  b,
-  output logic q
-);
+module m (input wire a, input wire b, output logic q);
   always_comb begin
     if (a) begin
       if (b) q = 1'b1;

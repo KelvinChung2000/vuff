@@ -2,6 +2,18 @@
 //! or neutral between two consecutive tokens. Pure functions — the builder
 //! layers `force_space_between` over `no_space_between` so an explicit
 //! force always wins over a forbid.
+//!
+//! Why string match (not CST) here: every rule below operates on
+//! single-character or short fixed-symbol punctuation (`;`, `,`, `(`, `[`,
+//! `::`, `==`, etc.). These are unambiguous at the lexical level — no SV
+//! grammar production renames `;` or `,`, and `is_binary_operator` covers
+//! exactly the operator symbols that always mean "binary op" in any
+//! context where they appear. Where the string would be ambiguous
+//! (`<<`/`>>` as shift vs. streaming-concat direction; `*` as multiply
+//! vs. wildcard import), the disambiguation lives outside this file and
+//! is delivered as a per-token CST mask — see
+//! `crate::expr::streaming_concat_mask` and the `prev == "::"` short-
+//! circuit below (which mirrors the existing `no_space_after` rule).
 
 /// Tokens that should not be preceded by a space.
 /// Note: `:` is deliberately NOT here — it is unambiguous only with CST
@@ -55,6 +67,19 @@ pub(crate) fn force_space_between(prev: &str, curr: &str) -> bool {
     }
     if curr == "*)" {
         return true;
+    }
+    // Statement/list terminators are never preceded by a space, even if
+    // the previous token would otherwise force one (e.g. wildcard `*` in
+    // `pkg::*;` — the `*` looks like a binary multiply by string match).
+    // The `*)` attribute closer is handled above and excluded here.
+    if matches!(curr, ";" | "," | ")" | "]" | "}") {
+        return false;
+    }
+    // Wildcard import: `pkg::*` — the `*` is not a binary multiply here.
+    // The string-based binary-op rule below would otherwise force a space
+    // around it. `::` always glues to whatever follows.
+    if prev == "::" {
+        return false;
     }
     // Comma followed by any non-closing token.
     if prev == "," && !matches!(curr, ")" | "]" | "}") {

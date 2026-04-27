@@ -8,7 +8,8 @@
 //! `if` / `for` / `while` / `always*` / `initial` / `final`.
 
 use vuff_sv_ast::{
-    NodeEvent, RefNode, Statement, StatementItem, StatementOrNull, SyntaxTree, Token,
+    FunctionStatementOrNull, NodeEvent, RefNode, Statement, StatementItem, StatementOrNull,
+    SyntaxTree, Token,
 };
 
 /// Per-frame record so Leave dedents the exact amount Enter bumped.
@@ -36,7 +37,23 @@ pub(crate) fn cst_depth_map(tree: &SyntaxTree, tokens: &[Token<'_>]) -> Vec<u32>
             }
             NodeEvent::Enter(node) => {
                 let parent = stack.iter().rev().find_map(|f| f.kind.as_ref().copied());
-                let bump = decide_bump(&node, parent);
+                // True when the nearest enclosing fn-task-body or seq-block
+                // is the fn-task-body — i.e. we're at the outer body level
+                // of a function/task with no intervening begin/end. Used to
+                // give that outer level its implicit body indent.
+                let outer_fn_task = stack
+                    .iter()
+                    .rev()
+                    .find_map(|f| match f.kind {
+                        Some(ParentKind::SeqOrParBlock) => Some(false),
+                        Some(ParentKind::FunctionTaskBody) => Some(true),
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+                let in_package = stack
+                    .iter()
+                    .any(|f| matches!(f.kind, Some(ParentKind::PackageDecl)));
+                let bump = decide_bump(&node, parent, outer_fn_task, in_package);
                 depth += bump;
                 stack.push(Frame {
                     delta: bump,
@@ -61,7 +78,13 @@ enum ParentKind {
     ProceduralTimingCtl,  // @(...)
     SeqOrParBlock,        // begin...end / fork...join
     CaseItem,             // case arm
-    // Other node kinds we don't need to match on.
+    FunctionTaskBody,     // function...endfunction / task...endtask body
+    PackageDecl,          // package...endpackage — distinguishes a real
+    // package body from a top-level Description::PackageItem
+    // (a stray declaration at file scope).
+    // Other node kinds we don't care about, but they still shadow further
+    // ancestors in the immediate-parent search so transitive structural
+    // relationships don't accidentally double-bump indent.
     Other,
 }
 
@@ -80,6 +103,10 @@ fn kind_of(node: &RefNode<'_>) -> ParentKind {
         | RefNode::LoopStatementForeach(_) => ParentKind::LoopStatement,
         RefNode::ProceduralTimingControlStatement(_) => ParentKind::ProceduralTimingCtl,
         RefNode::SeqBlock(_) | RefNode::ParBlock(_) => ParentKind::SeqOrParBlock,
+        RefNode::FunctionDeclaration(_) | RefNode::TaskDeclaration(_) => {
+            ParentKind::FunctionTaskBody
+        }
+        RefNode::PackageDeclaration(_) => ParentKind::PackageDecl,
         RefNode::CaseItemNondefault(_)
         | RefNode::CaseItemDefault(_)
         | RefNode::CasePatternItemNondefault(_)
@@ -88,7 +115,12 @@ fn kind_of(node: &RefNode<'_>) -> ParentKind {
     }
 }
 
-fn decide_bump(node: &RefNode<'_>, parent: Option<ParentKind>) -> u32 {
+fn decide_bump(
+    node: &RefNode<'_>,
+    parent: Option<ParentKind>,
+    outer_fn_task: bool,
+    in_package: bool,
+) -> u32 {
     match node {
         // Module-body / case-arm / generate-body items. Each one sits
         // one level deeper than its surrounding container.
@@ -98,9 +130,32 @@ fn decide_bump(node: &RefNode<'_>, parent: Option<ParentKind>) -> u32 {
         | RefNode::CaseItemDefault(_)
         | RefNode::CasePatternItemNondefault(_)
         | RefNode::CaseInsideItemNondefault(_)
+        | RefNode::CaseGenerateItemNondefault(_)
+        | RefNode::CaseGenerateItemDefault(_)
         | RefNode::GenerateItem(_) => 1,
+        // Package body items only bump when we're actually inside a
+        // `package … endpackage`. At top level, sv-parser also wraps
+        // stray declarations as `Description::PackageItem`, but those
+        // sit at the source-text root with no enclosing indent.
+        RefNode::PackageItem(_) if in_package => 1,
+        // Block-item declarations sit inside begin/end and inside
+        // function/task bodies. The immediate parent is typically a
+        // transparent wrapper (FunctionBodyDeclaration, TfItemDeclaration),
+        // so we accept either a direct SeqOrParBlock parent OR an outer
+        // function/task body context.
+        RefNode::BlockItemDeclaration(_) => {
+            u32::from(matches!(parent, Some(ParentKind::SeqOrParBlock)) || outer_fn_task)
+        }
+        // Tf-item declarations (function/task body declarations and port
+        // declarations on non-ANSI subroutines) wrap BlockItemDeclaration —
+        // only bump on the outer one to avoid double counting.
+        RefNode::TfItemDeclaration(_) if outer_fn_task => 1,
         RefNode::Statement(s) => stmt_bump(parent, s),
-        RefNode::StatementOrNull(s) => son_bump(parent, s),
+        RefNode::StatementOrNull(s) => son_bump(parent, s, outer_fn_task),
+        // Function-body statements wrap a Statement but appear under
+        // FunctionStatementOrNull, not StatementOrNull. The inner Statement
+        // sees parent=Other (transparent wrapper) and won't double-bump.
+        RefNode::FunctionStatementOrNull(s) if outer_fn_task => fson_bump(s),
         _ => 0,
     }
 }
@@ -126,7 +181,17 @@ fn stmt_bump(parent: Option<ParentKind>, s: &Statement) -> u32 {
     }
 }
 
-fn son_bump(parent: Option<ParentKind>, s: &StatementOrNull) -> u32 {
+fn fson_bump(s: &FunctionStatementOrNull) -> u32 {
+    let inner = match s {
+        FunctionStatementOrNull::Statement(fs) => &fs.nodes.0,
+        FunctionStatementOrNull::Attribute(_) => return 0,
+    };
+    let content_is_block_or_timing =
+        wraps_block(&inner.nodes.2) || wraps_timing_ctl(&inner.nodes.2);
+    u32::from(!content_is_block_or_timing)
+}
+
+fn son_bump(parent: Option<ParentKind>, s: &StatementOrNull, outer_fn_task: bool) -> u32 {
     let inner = match s {
         StatementOrNull::Statement(s) => s,
         StatementOrNull::Attribute(_) => return 0,
@@ -152,6 +217,11 @@ fn son_bump(parent: Option<ParentKind>, s: &StatementOrNull) -> u32 {
             | ParentKind::LoopStatement
             | ParentKind::ProceduralTimingCtl,
         ) => u32::from(!content_is_block_or_timing),
+        // Task bodies use plain StatementOrNull (not FunctionStatementOrNull)
+        // and reach this fn through a transparent wrapper. When we're at
+        // the outer body level of a function/task, treat it like
+        // fson_bump: bump unless the body itself is a block/timing.
+        _ if outer_fn_task => u32::from(!content_is_block_or_timing),
         _ => 0,
     }
 }

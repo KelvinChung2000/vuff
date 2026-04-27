@@ -1,14 +1,9 @@
 ---
 source: crates/vuff_sv_formatter/tests/fixture_snapshots.rs
-assertion_line: 48
 expression: formatted
 input_file: tests/fixtures/06_nested_if/input.sv
 ---
-module a (
-  input  wire  a,
-  input  wire  b,
-  output logic q
-);
+module a (input wire a, input wire b, output logic q);
   always_comb begin
     if (a) begin
       if (b) q = 1'b1;

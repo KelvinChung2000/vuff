@@ -12,8 +12,7 @@ use similar::TextDiff;
 use sv_parser::{parse_sv_str, Define};
 use svlint::linter::{Linter, TextRuleEvent};
 use vuff_config::{
-    load_config, BeginStyle, ConfigSource, FormatOptions, IndentStyle, PortListStyle,
-    ResolvedConfig, TrailingComma,
+    load_config, BeginStyle, ConfigSource, FormatOptions, IndentStyle, ResolvedConfig,
 };
 
 /// Standard Unix-ish exit codes.
@@ -53,6 +52,7 @@ struct ServerArgs {
 }
 
 #[derive(Parser, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 struct FormatArgs {
     /// Paths to format. Omit to read from stdin.
     paths: Vec<PathBuf>,
@@ -62,6 +62,13 @@ struct FormatArgs {
     /// Print a unified diff of would-be changes.
     #[arg(long)]
     diff: bool,
+    /// Rewrite each input file in place. Mutually exclusive with `--output`.
+    #[arg(short = 'i', long = "inplace", conflicts_with = "output")]
+    inplace: bool,
+    /// Write formatted output to this path instead of stdout. Only valid with a
+    /// single input (one file or stdin). Mutually exclusive with `--inplace`.
+    #[arg(short = 'o', long = "output")]
+    output: Option<PathBuf>,
     /// Filename associated with stdin (used for config discovery).
     #[arg(long)]
     stdin_filename: Option<PathBuf>,
@@ -231,15 +238,32 @@ fn run_format(args: FormatArgs) -> Result<u8> {
     let opts = resolved.options;
 
     if args.paths.is_empty() {
+        if args.inplace {
+            anyhow::bail!("--inplace requires file paths");
+        }
         return run_stdin(&opts, &args);
     }
 
+    let files: Vec<PathBuf> = args
+        .paths
+        .iter()
+        .map(|p| collect_sv_files(p))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+
+    if args.output.is_some() && files.len() > 1 {
+        anyhow::bail!(
+            "--output requires exactly one input file (got {})",
+            files.len()
+        );
+    }
+
     let mut any_change = false;
-    for target in &args.paths {
-        for file in collect_sv_files(target)? {
-            if process_file(&file, &opts, &args)? {
-                any_change = true;
-            }
+    for file in &files {
+        if process_file(file, &opts, &args)? {
+            any_change = true;
         }
     }
 
@@ -274,9 +298,13 @@ fn run_stdin(opts: &FormatOptions, args: &FormatArgs) -> Result<u8> {
             exit::WOULD_CHANGE
         });
     }
-    std::io::stdout()
-        .write_all(out.as_bytes())
-        .context("write stdout")?;
+    if let Some(out_path) = &args.output {
+        std::fs::write(out_path, out).with_context(|| format!("write {}", out_path.display()))?;
+    } else {
+        std::io::stdout()
+            .write_all(out.as_bytes())
+            .context("write stdout")?;
+    }
     Ok(exit::OK)
 }
 
@@ -285,19 +313,32 @@ fn process_file(path: &Path, opts: &FormatOptions, args: &FormatArgs) -> Result<
     let out = vuff_sv_formatter::format_source(&src, opts)
         .with_context(|| format!("format {}", path.display()))?;
     let changed = out != src;
-    if !changed {
-        return Ok(false);
-    }
     if args.check {
-        eprintln!("would reformat: {}", path.display());
-        return Ok(true);
+        if changed {
+            eprintln!("would reformat: {}", path.display());
+        }
+        return Ok(changed);
     }
     if args.diff {
-        print_diff(Some(path), &src, &out);
-        return Ok(true);
+        if changed {
+            print_diff(Some(path), &src, &out);
+        }
+        return Ok(changed);
     }
-    std::fs::write(path, out).with_context(|| format!("write {}", path.display()))?;
-    Ok(true)
+    if args.inplace {
+        if changed {
+            std::fs::write(path, out).with_context(|| format!("write {}", path.display()))?;
+        }
+        return Ok(changed);
+    }
+    if let Some(out_path) = &args.output {
+        std::fs::write(out_path, out).with_context(|| format!("write {}", out_path.display()))?;
+    } else {
+        std::io::stdout()
+            .write_all(out.as_bytes())
+            .context("write stdout")?;
+    }
+    Ok(changed)
 }
 
 fn collect_sv_files(target: &Path) -> Result<Vec<PathBuf>> {
@@ -352,14 +393,6 @@ fn run_config_show() -> Result<()> {
     println!();
     println!("[format]");
     println!("begin_style = {:?}", begin_style_name(opts.begin_style));
-    println!(
-        "port_list_style = {:?}",
-        port_list_style_name(opts.port_list_style)
-    );
-    println!(
-        "trailing_comma = {:?}",
-        trailing_comma_name(opts.trailing_comma)
-    );
     println!("wrap_default_nettype = {}", opts.wrap_default_nettype);
     Ok(())
 }
@@ -375,19 +408,5 @@ fn begin_style_name(value: BeginStyle) -> &'static str {
     match value {
         BeginStyle::KAndR => "k_and_r",
         BeginStyle::Allman => "allman",
-    }
-}
-
-fn port_list_style_name(value: PortListStyle) -> &'static str {
-    match value {
-        PortListStyle::OnePerLine => "one_per_line",
-        PortListStyle::Compact => "compact",
-    }
-}
-
-fn trailing_comma_name(value: TrailingComma) -> &'static str {
-    match value {
-        TrailingComma::Never => "never",
-        TrailingComma::Multiline => "multiline",
     }
 }

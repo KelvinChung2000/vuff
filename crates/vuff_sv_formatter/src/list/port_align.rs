@@ -34,13 +34,20 @@ pub(crate) struct PortList {
     pub(crate) paren_open: usize,
     pub(crate) paren_close: usize,
     pub(crate) rows: Vec<PortRow>,
+    /// True when the source between `paren_open` and `paren_close` contains
+    /// a `\n`. Drives the wrap trigger.
+    pub(crate) has_internal_newline: bool,
 }
 
 // Long by design: one event-machine walks every relevant node kind in
 // the port-list sub-tree. Splitting would scatter the shared mutable
 // state across helpers without clarifying anything.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn collect_port_lists(tree: &SyntaxTree, tokens: &[Token<'_>]) -> Vec<PortList> {
+pub(crate) fn collect_port_lists(
+    tree: &SyntaxTree,
+    tokens: &[Token<'_>],
+    source: &str,
+) -> Vec<PortList> {
     let mut out: Vec<PortList> = Vec::new();
     let mut cur: Option<PortList> = None;
 
@@ -69,14 +76,18 @@ pub(crate) fn collect_port_lists(tree: &SyntaxTree, tokens: &[Token<'_>]) -> Vec
                         paren_open: usize::MAX,
                         paren_close: usize::MAX,
                         rows: Vec::new(),
+                        has_internal_newline: false,
                     });
                 }
             }
             NodeEvent::Leave(RefNode::ListOfPortDeclarations(_)) => {
                 in_port_list = in_port_list.saturating_sub(1);
                 if in_port_list == 0 {
-                    if let Some(list) = cur.take() {
+                    if let Some(mut list) = cur.take() {
                         if list.paren_open != usize::MAX && list.paren_close != usize::MAX {
+                            let from = tokens[list.paren_open].end();
+                            let to = tokens[list.paren_close].offset;
+                            list.has_internal_newline = source[from..to].contains('\n');
                             out.push(list);
                         }
                     }

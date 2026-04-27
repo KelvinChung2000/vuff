@@ -32,8 +32,8 @@ pub enum FormatElement {
     Dedent(Vec<FormatElement>),
     Align(u8, Vec<FormatElement>),
     IfBreak {
-        flat: Box<FormatElement>,
-        broken: Box<FormatElement>,
+        flat: Vec<FormatElement>,
+        broken: Vec<FormatElement>,
     },
     ExpandParent,
     VerbatimComment(String),
@@ -107,8 +107,7 @@ fn contains_expand_forcer(elements: &[FormatElement]) -> bool {
         | FormatElement::Align(_, inner)
         | FormatElement::LineSuffix(inner) => contains_expand_forcer(inner),
         FormatElement::IfBreak { flat, broken } => {
-            contains_expand_forcer(std::slice::from_ref(flat.as_ref()))
-                || contains_expand_forcer(std::slice::from_ref(broken.as_ref()))
+            contains_expand_forcer(flat) || contains_expand_forcer(broken)
         }
         _ => false,
     })
@@ -139,7 +138,7 @@ fn flat_width(elements: &[FormatElement], budget: i32) -> Option<i32> {
                 width += flat_width(inner, budget - width)?;
             }
             FormatElement::IfBreak { flat, .. } => {
-                width += flat_width(std::slice::from_ref(flat.as_ref()), budget - width)?;
+                width += flat_width(flat, budget - width)?;
             }
             FormatElement::VerbatimComment(s) => width += s.chars().count() as i32,
         }
@@ -283,8 +282,8 @@ impl<'a> Printer<'a> {
                 self.align -= u32::from(*n);
             }
             FormatElement::IfBreak { flat: f, broken: b } => {
-                let choice: &FormatElement = if flat { f } else { b };
-                self.write_one(choice, flat);
+                let choice = if flat { f } else { b };
+                self.write_elements(choice, flat);
             }
         }
     }
@@ -402,8 +401,8 @@ mod tests {
         let doc_flat = vec![group(vec![
             text("a"),
             FormatElement::IfBreak {
-                flat: Box::new(text(",")),
-                broken: Box::new(text(";")),
+                flat: vec![text(",")],
+                broken: vec![text(";")],
             },
         ])];
         assert_eq!(print(&doc_flat, &default_opts()), "a,");
@@ -412,8 +411,8 @@ mod tests {
             text("aaaaaaaaaaaaaaaaaaaa"),
             FormatElement::SoftLine,
             FormatElement::IfBreak {
-                flat: Box::new(text(",")),
-                broken: Box::new(text(";")),
+                flat: vec![text(",")],
+                broken: vec![text(";")],
             },
         ])];
         let out = print(&doc_broken, &default_opts());

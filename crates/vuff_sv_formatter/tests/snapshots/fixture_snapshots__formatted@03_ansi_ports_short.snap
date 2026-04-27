@@ -1,12 +1,7 @@
 ---
 source: crates/vuff_sv_formatter/tests/fixture_snapshots.rs
-assertion_line: 48
 expression: formatted
 input_file: tests/fixtures/03_ansi_ports_short/input.sv
 ---
-module a (
-  input  wire clk,
-  input  wire rst_n,
-  output wire ready
-);
+module a (input wire clk, input wire rst_n, output wire ready);
 endmodule

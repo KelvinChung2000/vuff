@@ -7,7 +7,9 @@ use vuff_sv_ast::Token;
 
 use crate::context::{FormatCtx, Formatter};
 use crate::format_ext::Format;
-use crate::list::{collect_port_lists, render_port_list};
+use crate::list::{
+    collect_param_port_lists, collect_port_lists, render_param_port_list, render_port_list,
+};
 use crate::module::spans::ModuleSpan;
 use crate::verbatim::format_token_range;
 
@@ -45,20 +47,40 @@ impl Format for ModuleDeclarationRule {
             f.push_indent_for_new_line();
         }
 
-        // If this module has an ANSI port list, hand its emission off to
-        // the column-aligning renderer. We split the span into three:
-        // header up to `(`, the port-list, and the tail from `)` onward.
-        let port_list = collect_port_lists(ctx.tree, ctx.tokens)
+        // If this module has a parameter port list `#( … )` and/or an
+        // ANSI port list `( … )`, hand each off to its own renderer. We
+        // splice the verbatim emission around them so the headers / tails
+        // outside the lists still go through the standard token engine.
+        // Wrap renderers fire only when the human inserted a newline inside
+        // the `(...)` — otherwise the verbatim engine handles inline emission.
+        let param_list = collect_param_port_lists(ctx.tree, ctx.tokens, ctx.source)
             .into_iter()
-            .find(|pl| pl.paren_open >= start && pl.paren_close <= end);
-        if let Some(pl) = port_list {
-            format_token_range(ctx, f, start..pl.paren_open, self.leading_from);
-            render_port_list(ctx, f, &pl);
-            let tail_leading = ctx.tokens[pl.paren_close].end();
-            format_token_range(ctx, f, pl.paren_close + 1..end + 1, tail_leading);
-        } else {
-            format_token_range(ctx, f, start..end + 1, self.leading_from);
+            .find(|pl| pl.pound_tok >= start && pl.paren_close <= end && pl.has_internal_newline);
+        let port_list = collect_port_lists(ctx.tree, ctx.tokens, ctx.source)
+            .into_iter()
+            .find(|pl| pl.paren_open >= start && pl.paren_close <= end && pl.has_internal_newline);
+
+        let mut cursor = start;
+        let mut leading_from = self.leading_from;
+
+        if let Some(ppl) = &param_list {
+            // Emit header up through the `#` (verbatim handles `name #`
+            // spacing via the param-pound mask), then the rendered (…)
+            // block. The renderer owns `(` through `)`.
+            format_token_range(ctx, f, cursor..ppl.pound_tok + 1, leading_from);
+            render_param_port_list(ctx, f, ppl);
+            cursor = ppl.paren_close + 1;
+            leading_from = ctx.tokens[ppl.paren_close].end();
         }
+
+        if let Some(pl) = &port_list {
+            format_token_range(ctx, f, cursor..pl.paren_open, leading_from);
+            render_port_list(ctx, f, pl);
+            cursor = pl.paren_close + 1;
+            leading_from = ctx.tokens[pl.paren_close].end();
+        }
+
+        format_token_range(ctx, f, cursor..end + 1, leading_from);
 
         if append {
             f.push_hardline();

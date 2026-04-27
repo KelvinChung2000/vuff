@@ -36,20 +36,24 @@ pub(crate) fn emit_trivia_at(
 
     if has_comment {
         f.depth = body_depth;
-        emit_trivia_with_comments(f, slice, is_leading);
-        // Retarget any trailing indent that was just pushed.
-        if let Some(FormatElement::Text(last)) = f.out.last() {
-            if last.chars().all(|c| c == ' ' || c == '\t') {
-                f.out.pop();
-                f.depth = tail_depth;
-                f.push_indent_for_new_line();
+        let trailing = emit_trivia_with_comments(f, slice, is_leading);
+        match trailing {
+            // Trailing indent for a token landing on a fresh line — retarget
+            // to tail_depth so the next token sits at the caller's indent.
+            CommentTrailing::NewLineIndent => {
+                if let Some(FormatElement::Text(last)) = f.out.last() {
+                    if last.chars().all(|c| c == ' ' || c == '\t') {
+                        f.out.pop();
+                        f.depth = tail_depth;
+                        f.push_indent_for_new_line();
+                    }
+                }
             }
-        } else if let Some(FormatElement::StaticText(last)) = f.out.last() {
-            if last.chars().all(|c| c == ' ' || c == '\t') {
-                f.out.pop();
-                f.depth = tail_depth;
-                f.push_indent_for_new_line();
-            }
+            // Inline trailing — the next token sits on the same line as the
+            // last comment. emit_trivia_with_comments already pushed a single
+            // space (or pushed nothing when the comment ended at slice end);
+            // leave the buffer alone in either case.
+            CommentTrailing::InlineSpace | CommentTrailing::None => {}
         }
         f.depth = saved;
         return;
@@ -77,7 +81,21 @@ pub(crate) fn emit_trivia_at(
 /// comments, preserve the interior byte-for-byte (only the first line's
 /// leading whitespace is normalized). Strip trailing horizontal
 /// whitespace from each physical line.
-fn emit_trivia_with_comments(f: &mut Formatter, slice: &str, is_leading: bool) {
+/// What was emitted at the very end of `emit_trivia_with_comments`, so the
+/// caller can decide how to bridge to the next real token.
+enum CommentTrailing {
+    /// Last thing pushed is an indent for a token that will start on a
+    /// fresh line — caller may retarget that indent to a different depth.
+    NewLineIndent,
+    /// Last thing pushed is a single space because the next token sits
+    /// inline with the previous comment on the same physical line.
+    InlineSpace,
+    /// Nothing trailing — comment ended at the end of the slice with no
+    /// following whitespace.
+    None,
+}
+
+fn emit_trivia_with_comments(f: &mut Formatter, slice: &str, is_leading: bool) -> CommentTrailing {
     let lines: Vec<&str> = slice.split('\n').collect();
     let mut blank_run: u32 = 0;
     let mut emitted_hardline = false;
@@ -134,8 +152,22 @@ fn emit_trivia_with_comments(f: &mut Formatter, slice: &str, is_leading: bool) {
         }
     }
 
-    if emitted_hardline {
+    // Push a trailing indent only when the next real token will land on a
+    // new line. That's true exactly when the last split-line is empty
+    // (slice ended with `\n` or trailing whitespace following a newline).
+    // If the last split-line has content, the next token sits inline with
+    // the comment and a single space will be inserted instead.
+    let last_line_has_content = lines
+        .last()
+        .is_some_and(|l| !l.trim_end_matches([' ', '\t']).is_empty());
+    if emitted_hardline && !last_line_has_content {
         f.push_indent_for_new_line();
+        CommentTrailing::NewLineIndent
+    } else if emitted_hardline && last_line_has_content {
+        f.push_static(" ");
+        CommentTrailing::InlineSpace
+    } else {
+        CommentTrailing::None
     }
 }
 

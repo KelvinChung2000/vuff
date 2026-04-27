@@ -60,32 +60,34 @@ Skip-v0.1 directories exist as stubs only; their nodes hit `verbatim.rs`.
 |---|---|---|---|---|
 | A.1.1 library text | `LibraryText` | skip-v0.1 | — | — |
 | A.1.2 source text | `SourceText`, `Description` | done | `source_text/root.rs` | 01, 02, 30, 31, 32, 34, 35 |
-| A.1.3 module parameters | `ParameterPortList`, `ParameterDeclaration` | todo | `module/parameter_list.rs` | 13 |
-| A.1.3 module ports | `ListOfPorts`, `ListOfPortDeclarations`, `NonansiPortDeclaration`, `AnsiPortDeclaration` | wip | `list/port_paren.rs` | 12, 40, 41, 42, 43 |
-| A.1.4 module items | `ModuleItem`, `ModuleOrGenerateItem` | todo | `module/module_item.rs` | — |
+| A.1.3 module parameters | `ParameterPortList`, `ParameterDeclaration` | done | `list/param_port_list.rs` | 13, 42, 130, 131, 132 |
+| A.1.3 module ports | `ListOfPorts`, `ListOfPortDeclarations`, `NonansiPortDeclaration`, `AnsiPortDeclaration` | done | `list/port_paren.rs`, `list/port_align.rs`, `list/port_align_render.rs` | 12, 40, 41, 42, 43, 87, 88, 89, 90, 91 |
+| A.1.4 module items | `ModuleItem`, `ModuleOrGenerateItem` | done | (pass-through tokens) | 116, 117 |
 | A.1.4 module declaration | `ModuleDeclarationAnsi`, `ModuleDeclarationNonansi` | done | `module/module_declaration.rs` | 01, 02, 03, 04, 30, 31, 32, 33, 34, 35 |
 | A.1.5 interface declaration | `InterfaceDeclaration*` | skip-v0.1 | — | — |
 | A.1.6 program declaration | `ProgramDeclaration*` | skip-v0.1 | — | — |
 | A.1.7 checker declaration | `CheckerDeclaration` | skip-v0.1 | — | — |
 | A.1.8 class | `ClassDeclaration`, `ClassItem` | skip-v0.1 | — | — |
 | A.1.9 configuration source | `ConfigDeclaration` | skip-v0.1 | — | — |
-| A.1.10 package | `PackageDeclaration`, `PackageItem` | skip-v0.1 | — | — |
+| A.1.10 package | `PackageDeclaration`, `PackageItem` | done | `indent_map.rs` | 133, 135 |
 | A.1.11 preprocessor | (handled by sv-parser preprocessor) | done | — | (implicit) |
 
 ## Annex A.2 — Declarations
 
 | Production | Node | Status | Owner | Goldens |
 |---|---|---|---|---|
-| A.2.1.1 module parameter | `LocalParameterDeclaration`, `ParameterDeclaration` | todo | `decl/parameter.rs` | 13 |
-| A.2.1.2 port declarations | `InputDeclaration`, `OutputDeclaration`, `InoutDeclaration`, `RefDeclaration` | todo | `decl/port_declaration.rs` | 12 (xfail) |
-| A.2.1.3 type declarations | `TypeDeclaration`, `NetTypeDeclaration` | todo | `decl/type_declaration.rs` | — |
-| A.2.2 net & variable types | `NetDeclaration`, `DataDeclaration`, `PackageImportDeclaration` | todo | `decl/net_data.rs` | — |
-| A.2.3 declaration lists | `ListOfVariableDeclAssignments`, `ListOfPortIdentifiers` | todo | `decl/list.rs` | 13 |
-| A.2.4 declaration assignments | `VariableDeclAssignment`, `NetDeclAssignment` | todo | `decl/assignment.rs` | — |
-| A.2.5 declaration ranges | `UnpackedDimension`, `PackedDimension` | todo | `decl/range.rs` | 28 |
-| A.2.6 function declarations | `FunctionDeclaration`, `FunctionBodyDeclaration` | skip-v0.1 | `function/` | — |
-| A.2.7 task declarations | `TaskDeclaration` | skip-v0.1 | `task/` | — |
-| A.2.8 block item declarations | `BlockItemDeclaration` | todo | `stmt/block_item.rs` | — |
+| A.2.1.1 module parameter | `LocalParameterDeclaration`, `ParameterDeclaration` | done | (pass-through tokens) | 13, 115 |
+| A.2.1.2 port declarations | `InputDeclaration`, `OutputDeclaration`, `InoutDeclaration`, `RefDeclaration` | done | `list/port_align.rs` | 12, 40, 41, 42, 43 |
+| A.2.1.3 type declarations | `TypeDeclaration` | done | (pass-through tokens) | 104 |
+| A.2.1.3 net-type declaration | `NetTypeDeclaration` | skip-v0.1 | — | — |
+| A.2.2 net & variable types | `NetDeclaration`, `DataDeclaration` | done | (pass-through tokens) | 100, 101, 102, 103, 104, 105 |
+| A.2.2 package import | `PackageImportDeclaration` | done | `tokens/spacing.rs` | 134 |
+| A.2.3 declaration lists | `ListOfVariableDeclAssignments`, `ListOfPortIdentifiers` | done | (pass-through tokens) | 102, 13 |
+| A.2.4 declaration assignments | `VariableDeclAssignment`, `NetDeclAssignment` | done | (pass-through tokens) | 103 |
+| A.2.5 declaration ranges | `UnpackedDimension`, `PackedDimension` | done | (pass-through tokens) | 28, 101, 112 |
+| A.2.6 function declarations | `FunctionDeclaration`, `FunctionBodyDeclaration` | done | `indent_map.rs` | 119, 122 |
+| A.2.7 task declarations | `TaskDeclaration` | done | `indent_map.rs` | 120 |
+| A.2.8 block item declarations | `BlockItemDeclaration` | done | `indent_map.rs` | 121 |
 | A.2.9 interface declarations | modports etc. | skip-v0.1 | — | — |
 | A.2.10 assertion declarations | `SequenceDeclaration`, `PropertyDeclaration` | skip-v0.1 | — | — |
 | A.2.11 covergroup | `CovergroupDeclaration` | skip-v0.1 | — | — |
@@ -94,27 +96,29 @@ Skip-v0.1 directories exist as stubs only; their nodes hit `verbatim.rs`.
 
 | Production | Node | Status | Owner | Goldens |
 |---|---|---|---|---|
-| A.3 primitive instances | gate-level primitives | skip-v0.1 | — | — |
-| A.4.1 module instantiation | `ModuleInstantiation`, `HierarchicalInstance`, `NamedPortConnection`, `OrderedPortConnection` | todo | `instantiation/module.rs` | 24 (xfail) |
-| A.4.1 parameter override | `NamedParameterAssignment`, `OrderedParameterAssignment` | todo | `instantiation/parameter_assign.rs` | — |
-| A.4.2 generate | `GenerateRegion`, `LoopGenerateConstruct`, `IfGenerateConstruct`, `CaseGenerateConstruct` | skip-v0.1 | — | 11 (smoke) |
+| A.3 primitive instances | gate-level primitives | done | (pass-through tokens) | 114 |
+| A.4.1 module instantiation | `ModuleInstantiation`, `HierarchicalInstance`, `NamedPortConnection`, `OrderedPortConnection` | done | `list/instance_paren.rs`, `list/param_assign.rs`, `list/inst_port_list.rs` | 24 (xfail), 116, 117, 118, 143, 144, 145, 146 |
+| A.4.1 parameter override | `NamedParameterAssignment`, `OrderedParameterAssignment` | done | `list/param_assign.rs` | 117 |
+| A.4.2 generate | `GenerateRegion`, `LoopGenerateConstruct`, `IfGenerateConstruct` | done | `tokens/delimiters.rs`, `indent_map.rs` | 11, 123, 124, 125, 126 |
+| A.4.2 case-generate | `CaseGenerateConstruct` | done | `indent_map.rs`, `stmt/reset_mask.rs` | 140 |
 | A.5 UDP | `UdpDeclaration` | skip-v0.1 | — | — |
 
 ## Annex A.6 — Behavioral statements
 
 | Production | Node | Status | Owner | Goldens |
 |---|---|---|---|---|
-| A.6.1 continuous assignment | `ContinuousAssign`, `NetAlias` | todo | `stmt/continuous_assign.rs` | — |
+| A.6.1 continuous assignment | `ContinuousAssign` | done | (pass-through tokens) | 96, 97, 98, 99 |
+| A.6.1 net alias | `NetAlias` | skip-v0.1 | — | — |
 | A.6.2 procedural blocks | `AlwaysConstruct`, `InitialConstruct`, `FinalConstruct` | done | `indent_map.rs` | 10, 21, 51, 52 |
 | A.6.2 procedural assignments | `BlockingAssignment`, `NonblockingAssignment`, `ProceduralContinuousAssignment` | done | `stmt/boundaries.rs` | 10, 11, 16, 51 |
 | A.6.3 parallel/sequential blocks | `SeqBlock`, `ParBlock` | done | `indent_map.rs`, `stmt/seq_block.rs` | 08, 09, 44, 45, 46, 47, 53 |
 | A.6.4 statements | `StatementOrNull`, `Statement` | done | `stmt/boundaries.rs`, `indent_map.rs` | all |
-| A.6.5 timing control | `DelayControl`, `EventControl`, `CycleDelay` | wip | `indent_map.rs` | 10 |
+| A.6.5 timing control | `DelayControl`, `EventControl`, `CycleDelay` | done | (pass-through tokens) | 10, 136 |
 | A.6.6 conditional | `ConditionalStatement`, `UniquePriority`, `CondPredicate` | done | `indent_map.rs` | 16, 51, 54 |
 | A.6.7 case | `CaseStatementNormal`, `CaseStatementInside`, `CaseStatementMatches`, `CaseItemNondefault`, `CaseItemDefault` | done | `indent_map.rs` | 11, 29, 48, 53 |
 | A.6.8 patterns | `PatternAny`, `PatternIdentifier`, `PatternConcat` | skip-v0.1 | — | — |
 | A.6.8 looping | `LoopStatement`, `ForInitialization`, `ForStep` | done | `indent_map.rs` | 52 |
-| A.6.9 subroutine calls | `SubroutineCallStatement`, `SystemTfCall`, `TfCall` | todo | `expr/subroutine_call.rs` | 10 |
+| A.6.9 subroutine calls | `SubroutineCallStatement`, `SystemTfCall`, `TfCall` | done | (pass-through tokens) | 106, 107, 109 |
 | A.6.10 assertion stmts | `ConcurrentAssertionItem`, `ImmediateAssertionStatement` | skip-v0.1 | — | — |
 | A.6.11 clocking | `ClockingDeclaration` | skip-v0.1 | — | — |
 | A.6.12 randsequence | `RandsequenceStatement` | skip-v0.1 | — | — |
@@ -123,14 +127,16 @@ Skip-v0.1 directories exist as stubs only; their nodes hit `verbatim.rs`.
 
 | Production | Node | Status | Owner | Goldens |
 |---|---|---|---|---|
-| A.8.1 concatenation | `Concatenation`, `MultipleConcatenation`, `StreamingConcatenation` | todo | `expr/concatenation.rs` | — |
-| A.8.2 subroutine calls | `SystemTfCall`, `TfCall`, `MethodCall` | todo | `expr/call.rs` | 10 |
-| A.8.3 expressions | `Expression`, `BinaryExpression`, `UnaryExpression`, `IncOrDecExpression` | wip | `expr/binary.rs`, `expr/unary.rs` | 01, 07 |
+| A.8.1 concatenation | `Concatenation`, `MultipleConcatenation` | done | (pass-through tokens) | 110 |
+| A.8.1 streaming concatenation | `StreamingConcatenation` | done | `expr/streaming.rs` | 142 |
+| A.8.2 subroutine calls | `SystemTfCall`, `TfCall`, `MethodCall` | done | (pass-through tokens) | 106, 107, 108, 109 |
+| A.8.3 expressions | `Expression`, `BinaryExpression`, `UnaryExpression`, `IncOrDecExpression` | done | `tokens/spacing.rs`, `expr/binary.rs`, `expr/unary.rs` | 01, 07, 137, 138, 139 |
 | A.8.3 conditional expression | `ConditionalExpression` | done | `expr/conditional.rs` | 26, 27, 28, 48, 49, 50 |
-| A.8.3 inside expression | `InsideExpression` | todo | `expr/inside.rs` | — |
-| A.8.4 primaries | `Primary`, `PrimaryLiteral`, `EmptyQueue` | todo | `expr/primary.rs` | — |
-| A.8.5 expression left-side | `VariableLvalue`, `NetLvalue` | todo | `expr/lvalue.rs` | — |
-| A.8.6 operators | `UnaryOperator`, `BinaryOperator`, `IncOrDecOperator` | wip | `tokens/spacing.rs` | 01 |
+| A.8.3 inside expression | `InsideExpression` | done | (pass-through tokens) | 113 |
+| A.8.4 primaries | `Primary`, `PrimaryLiteral` | done | (pass-through tokens) | 111 |
+| A.8.4 empty queue | `EmptyQueue` | done | (pass-through tokens) | 141 |
+| A.8.5 expression left-side | `VariableLvalue`, `NetLvalue` | done | (pass-through tokens) | 110 |
+| A.8.6 operators | `UnaryOperator`, `BinaryOperator`, `IncOrDecOperator` | done | `tokens/spacing.rs` | 01, 137, 138, 139 |
 | A.8.7 numbers | `IntegralNumber`, `RealNumber`, `DecimalNumber` | done | (pass-through tokens) | 01 |
 | A.8.8 strings | `StringLiteral` | done | (pass-through tokens) | — |
 
@@ -138,8 +144,8 @@ Skip-v0.1 directories exist as stubs only; their nodes hit `verbatim.rs`.
 
 | Production | Node | Status | Owner | Goldens |
 |---|---|---|---|---|
-| A.9.1 attributes | `AttributeInstance`, `AttrSpec` | wip | `attribute/spans.rs` | 18, 19, 20, 22, 23, 24 (xfail), 25, 36, 37, 38, 39 |
-| A.9.2 comments | `Comment` | wip | `comments/` | 14 (xfail), 15 |
+| A.9.1 attributes | `AttributeInstance`, `AttrSpec` | done | `attribute/spans.rs` | 18, 19, 20, 22, 23, 24, 25, 36, 37, 38, 39 |
+| A.9.2 comments | `Comment` | done | `tokens/trivia.rs` | 14, 15, 127, 128, 129 |
 | A.9.3 identifiers | `Identifier`, `HierarchicalIdentifier`, `EscapedIdentifier` | done | (pass-through tokens) | — |
 
 ## Whitespace & layout policies (cross-cutting)
@@ -155,17 +161,16 @@ Skip-v0.1 directories exist as stubs only; their nodes hit `verbatim.rs`.
 | `begin_style = k_and_r` | done | `stmt/seq_block.rs` | 08, 44, 45, 46 |
 | `begin_style = allman` | done | `stmt/seq_block.rs` | 09, 47 |
 | Block label `: name` suppresses continuation indent | done | `verbatim.rs` (label_pending) | 44, 45, 47 |
-| `port_list_style = one_per_line` | todo | `list/port_list.rs` (future) | — |
-| `port_list_style = compact` | todo | `list/port_list.rs` (future) | — |
-| Space before port-list `(` | done | `list/port_paren.rs` | 12, 40, 41, 42, 43 |
-| `trailing_comma = multiline` | todo | `tokens/spacing.rs` | — |
-| `trailing_comma = never` | todo | `tokens/spacing.rs` | — |
-| Line-width-driven wrapping | todo | `expr/*` via Group IR | 07 |
+| Port list one-per-line layout (newline-triggered) | done | `list/port_align_render.rs`, `list/param_port_list.rs` | 13, 130, 131, 132 |
+| Space before port-list `(` | done | `list/port_paren.rs` | 12, 40, 41, 42 |
+| Newline-triggered wrap — instantiation port lists | done | `list/inst_port_list.rs` | 143, 144, 145, 146, 147 |
+| Newline-triggered wrap — generic delimited groups (`(…)`/`{…}`/`[…]`) | done | `list/wrap_mask.rs`, `verbatim.rs` | 148, 149, 150, 151 |
+| Auto-wrap on line-width overflow | skip-v0.1 | by design — formatter never wraps unless user inserts a newline; long lines are the user's responsibility | — |
 | Statement continuation indent | done | `stmt/boundaries.rs`, `indent_map.rs` | all |
 | Implicit-begin body indent (if/for/while/always without begin) | done | `indent_map.rs` | 51, 52, 54 |
-| Ternary multi-line layout | wip | `expr/conditional.rs` | 26, 27, 49, 50 |
-| Multi-line attribute layout | wip | `attribute/spans.rs` | 22, 25, 39 |
-| Comment attachment (leading / trailing / dangling) | todo | `comments/placement.rs` | 14 (xfail), 15 |
+| Ternary multi-line layout | done | `expr/conditional.rs` | 26, 27, 49, 50 |
+| Multi-line attribute layout | done | `attribute/spans.rs` | 22, 25, 39 |
+| Comment attachment (leading / trailing / dangling) | done | `tokens/trivia.rs` | 14, 15 |
 
 ## Out of scope for v0.1 (explicit)
 
