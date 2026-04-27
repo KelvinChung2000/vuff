@@ -9,12 +9,29 @@
 //! This split mirrors ruff's `FormatContext` + `Formatter` separation.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 use vuff_config::{FormatOptions, IndentStyle};
 use vuff_formatter::{FormatElement, PrintOptions};
 use vuff_sv_ast::{Parsed, SyntaxTree, Token};
 
 use crate::directives::DirectiveAnchors;
+
+/// Reverse index from a token's preprocessed-source byte offset to its
+/// position in the flat token list. The CST visitor surfaces every
+/// token as a `Locate` event keyed by offset, and several mask builders
+/// previously did a linear `tokens.iter().position(...)` per event —
+/// quadratic on real files. This map lets each lookup be O(1).
+pub(crate) type TokenIndex = HashMap<usize, usize>;
+
+#[must_use]
+pub(crate) fn build_token_index(tokens: &[Token<'_>]) -> TokenIndex {
+    tokens
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (t.offset, i))
+        .collect()
+}
 
 /// Read-only state shared by every formatter rule. Cheap to pass by
 /// reference; does not own any of its pointees.

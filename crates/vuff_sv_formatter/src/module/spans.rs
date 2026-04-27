@@ -69,8 +69,16 @@ fn byte_range_to_token_range(
     first_byte: usize,
     last_byte_end: usize,
 ) -> Option<ModuleSpan> {
-    let start = tokens.iter().position(|t| t.offset >= first_byte)?;
-    let end = tokens.iter().rposition(|t| t.end() <= last_byte_end)?;
+    // Tokens are in source order; binary-search both endpoints.
+    let start = tokens.partition_point(|t| t.offset < first_byte);
+    if start >= tokens.len() {
+        return None;
+    }
+    let end_after = tokens.partition_point(|t| t.end() <= last_byte_end);
+    if end_after == 0 {
+        return None;
+    }
+    let end = end_after - 1;
     if end < start {
         return None;
     }

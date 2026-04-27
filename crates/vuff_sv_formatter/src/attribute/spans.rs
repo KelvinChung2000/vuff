@@ -64,8 +64,17 @@ fn to_span(
     first_byte: usize,
     last_byte_end: usize,
 ) -> Option<AttributeSpan> {
-    let start = tokens.iter().position(|t| t.offset >= first_byte)?;
-    let end = tokens.iter().rposition(|t| t.end() <= last_byte_end)?;
+    // Tokens are emitted in source order, so their offsets are
+    // non-decreasing — binary-search both endpoints in O(log N).
+    let start = tokens.partition_point(|t| t.offset < first_byte);
+    if start >= tokens.len() {
+        return None;
+    }
+    let end_after = tokens.partition_point(|t| t.end() <= last_byte_end);
+    if end_after == 0 {
+        return None;
+    }
+    let end = end_after - 1;
     if end < start {
         return None;
     }

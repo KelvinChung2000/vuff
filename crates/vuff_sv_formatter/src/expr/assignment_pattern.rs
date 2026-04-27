@@ -12,10 +12,13 @@
 
 use vuff_sv_ast::{NodeEvent, RefNode, SyntaxTree, Token};
 
+use crate::context::build_token_index;
+
 /// Mask over `tokens` — true on every `'{` token that opens an apostrophe-brace.
 pub(crate) fn apostrophe_brace_mask(tree: &SyntaxTree, tokens: &[Token<'_>]) -> Vec<bool> {
     let mut mask = vec![false; tokens.len()];
     let mut pending: u32 = 0;
+    let tok_idx = build_token_index(tokens);
 
     for ev in tree.into_iter().event() {
         match ev {
@@ -23,7 +26,7 @@ pub(crate) fn apostrophe_brace_mask(tree: &SyntaxTree, tokens: &[Token<'_>]) -> 
                 pending += 1;
             }
             NodeEvent::Enter(RefNode::Locate(loc)) if pending > 0 => {
-                if let Some(idx) = tokens.iter().position(|t| t.offset == loc.offset) {
+                if let Some(&idx) = tok_idx.get(&loc.offset) {
                     if tokens[idx].text == "'{" {
                         mask[idx] = true;
                         pending -= 1;

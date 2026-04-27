@@ -17,11 +17,18 @@
 
 use vuff_sv_ast::{NodeEvent, RefNode, SyntaxTree, Token};
 
+use crate::context::build_token_index;
+
 pub(crate) fn control_header_paren_mask(tree: &SyntaxTree, tokens: &[Token<'_>]) -> Vec<bool> {
     let mut mask = vec![false; tokens.len()];
     let mut paren_stack: Vec<usize> = Vec::new();
     // Count of single-predicate frames still awaiting their first `(`.
     let mut single_pending: u32 = 0;
+
+    // O(1) offset → token-index lookup. The CST visitor surfaces every
+    // token as a `Locate` event keyed by offset; without this index each
+    // event would do a linear search through the flat token list.
+    let tok_idx = build_token_index(tokens);
 
     for ev in tree.into_iter().event() {
         match ev {
@@ -29,7 +36,7 @@ pub(crate) fn control_header_paren_mask(tree: &SyntaxTree, tokens: &[Token<'_>])
                 single_pending += 1;
             }
             NodeEvent::Enter(RefNode::Locate(loc)) => {
-                if let Some(idx) = tokens.iter().position(|t| t.offset == loc.offset) {
+                if let Some(&idx) = tok_idx.get(&loc.offset) {
                     match tokens[idx].text {
                         "(" => {
                             paren_stack.push(idx);

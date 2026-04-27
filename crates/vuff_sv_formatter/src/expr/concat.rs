@@ -17,6 +17,8 @@
 
 use vuff_sv_ast::{NodeEvent, RefNode, SyntaxTree, Token};
 
+use crate::context::build_token_index;
+
 /// Returns `(tight_after_open, tight_before_close, tight_before_open)`.
 pub(crate) fn concat_brace_masks(
     tree: &SyntaxTree,
@@ -29,13 +31,14 @@ pub(crate) fn concat_brace_masks(
     // Per active MultipleConcatenation frame, count of `{` tokens seen so
     // far inside it. The 2nd brace is the replication's inner `{`.
     let mut rep_stack: Vec<u32> = Vec::new();
+    let tok_idx = build_token_index(tokens);
 
     for ev in tree.into_iter().event() {
         match ev {
             NodeEvent::Enter(ref node) => {
                 if let RefNode::Locate(loc) = node {
                     if concat_depth > 0 {
-                        if let Some(idx) = tokens.iter().position(|t| t.offset == loc.offset) {
+                        if let Some(&idx) = tok_idx.get(&loc.offset) {
                             match tokens[idx].text {
                                 "{" => {
                                     after_open[idx] = true;

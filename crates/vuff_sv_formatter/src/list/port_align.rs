@@ -10,6 +10,8 @@
 
 use vuff_sv_ast::{NodeEvent, RefNode, SyntaxTree, Token};
 
+use crate::context::build_token_index;
+
 /// Inclusive token-index range `[start, end]` describing one port-list
 /// column.
 #[derive(Clone, Copy, Debug)]
@@ -66,6 +68,7 @@ pub(crate) fn collect_port_lists(
     let mut packed_range: Option<TokRange> = None;
     let mut tail_start: Option<usize> = None;
     let mut tail_end: Option<usize> = None;
+    let tok_idx = build_token_index(tokens);
 
     for ev in tree.into_iter().event() {
         match ev {
@@ -146,7 +149,7 @@ pub(crate) fn collect_port_lists(
                 }
             }
             NodeEvent::Enter(RefNode::Locate(loc)) if in_port_list > 0 => {
-                let Some(idx) = tokens.iter().position(|t| t.offset == loc.offset) else {
+                let Some(&idx) = tok_idx.get(&loc.offset) else {
                     continue;
                 };
                 let text = tokens[idx].text;

@@ -9,12 +9,15 @@
 
 use vuff_sv_ast::{NodeEvent, RefNode, SyntaxTree, Token};
 
+use crate::context::build_token_index;
+
 /// Mask over `tokens` — true on every `#` token that opens a
 /// `ParameterValueAssignment`.
 pub(crate) fn param_assign_pound_mask(tree: &SyntaxTree, tokens: &[Token<'_>]) -> Vec<bool> {
     let mut mask = vec![false; tokens.len()];
     let mut inside: u32 = 0;
     let mut pending_first = false;
+    let tok_idx = build_token_index(tokens);
 
     for ev in tree.into_iter().event() {
         match ev {
@@ -31,7 +34,7 @@ pub(crate) fn param_assign_pound_mask(tree: &SyntaxTree, tokens: &[Token<'_>]) -
                 }
             }
             NodeEvent::Enter(RefNode::Locate(loc)) if pending_first => {
-                if let Some(idx) = tokens.iter().position(|t| t.offset == loc.offset) {
+                if let Some(&idx) = tok_idx.get(&loc.offset) {
                     if tokens[idx].text == "#" {
                         mask[idx] = true;
                         pending_first = false;

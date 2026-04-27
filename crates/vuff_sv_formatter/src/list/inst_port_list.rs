@@ -9,7 +9,7 @@
 
 use vuff_sv_ast::{NodeEvent, RefNode, SyntaxTree, Token};
 
-use crate::context::{FormatCtx, Formatter};
+use crate::context::{build_token_index, FormatCtx, Formatter};
 use crate::tokens::trivia::emit_trivia_at;
 
 #[derive(Debug, Clone, Copy)]
@@ -43,6 +43,7 @@ pub(crate) fn collect_inst_port_lists(
     let mut in_row: u32 = 0;
     let mut row_start: Option<usize> = None;
     let mut row_end: Option<usize> = None;
+    let tok_idx = build_token_index(tokens);
 
     for ev in tree.into_iter().event() {
         match ev {
@@ -96,7 +97,7 @@ pub(crate) fn collect_inst_port_lists(
                 }
             }
             NodeEvent::Enter(RefNode::Locate(loc)) if in_inst > 0 => {
-                let Some(idx) = tokens.iter().position(|t| t.offset == loc.offset) else {
+                let Some(&idx) = tok_idx.get(&loc.offset) else {
                     continue;
                 };
                 let text = tokens[idx].text;

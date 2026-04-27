@@ -8,6 +8,8 @@
 
 use vuff_sv_ast::{NodeEvent, RefNode, SyntaxTree, Token};
 
+use crate::context::build_token_index;
+
 /// Mask over `tokens` — true on every `(` that opens a hierarchical
 /// instance's port-connection list.
 pub(crate) fn force_space_before_instance_paren_mask(
@@ -17,6 +19,7 @@ pub(crate) fn force_space_before_instance_paren_mask(
     let mut mask = vec![false; tokens.len()];
     let mut inside: u32 = 0;
     let mut pending_first_paren = false;
+    let tok_idx = build_token_index(tokens);
 
     for ev in tree.into_iter().event() {
         match ev {
@@ -33,7 +36,7 @@ pub(crate) fn force_space_before_instance_paren_mask(
                 }
             }
             NodeEvent::Enter(RefNode::Locate(loc)) if pending_first_paren => {
-                if let Some(idx) = tokens.iter().position(|t| t.offset == loc.offset) {
+                if let Some(&idx) = tok_idx.get(&loc.offset) {
                     if tokens[idx].text == "(" {
                         mask[idx] = true;
                         pending_first_paren = false;

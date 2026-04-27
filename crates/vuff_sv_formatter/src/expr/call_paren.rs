@@ -16,6 +16,8 @@
 
 use vuff_sv_ast::{NodeEvent, RefNode, SyntaxTree, Token};
 
+use crate::context::build_token_index;
+
 /// Mask over `tokens` — true on every `(` that opens a subroutine call.
 pub(crate) fn call_open_paren_mask(tree: &SyntaxTree, tokens: &[Token<'_>]) -> Vec<bool> {
     let mut mask = vec![false; tokens.len()];
@@ -24,6 +26,7 @@ pub(crate) fn call_open_paren_mask(tree: &SyntaxTree, tokens: &[Token<'_>]) -> V
     // `true` = still waiting for the first `(`; flipped to false once
     // consumed. Popped on Leave.
     let mut armed_stack: Vec<bool> = Vec::new();
+    let tok_idx = build_token_index(tokens);
 
     for ev in tree.into_iter().event() {
         match ev {
@@ -34,7 +37,7 @@ pub(crate) fn call_open_paren_mask(tree: &SyntaxTree, tokens: &[Token<'_>]) -> V
                 armed_stack.pop();
             }
             NodeEvent::Enter(RefNode::Locate(loc)) => {
-                if let Some(idx) = tokens.iter().position(|t| t.offset == loc.offset) {
+                if let Some(&idx) = tok_idx.get(&loc.offset) {
                     match tokens[idx].text {
                         "(" => {
                             if let Some(armed) = armed_stack.last_mut() {

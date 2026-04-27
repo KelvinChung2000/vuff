@@ -8,6 +8,8 @@
 
 use vuff_sv_ast::{NodeEvent, RefNode, SyntaxTree, Token};
 
+use crate::context::build_token_index;
+
 /// Mask over `tokens` — true on every `(` that begins a port list.
 pub(crate) fn force_space_before_port_paren_mask(
     tree: &SyntaxTree,
@@ -16,6 +18,7 @@ pub(crate) fn force_space_before_port_paren_mask(
     let mut mask = vec![false; tokens.len()];
     let mut inside_port_list: u32 = 0;
     let mut pending_first_paren = false;
+    let tok_idx = build_token_index(tokens);
 
     for ev in tree.into_iter().event() {
         match ev {
@@ -34,7 +37,7 @@ pub(crate) fn force_space_before_port_paren_mask(
             NodeEvent::Enter(RefNode::Locate(loc)) if pending_first_paren => {
                 // First Locate inside the port list node should be `(`. Find
                 // the token at this offset and mark it.
-                if let Some(idx) = tokens.iter().position(|t| t.offset == loc.offset) {
+                if let Some(&idx) = tok_idx.get(&loc.offset) {
                     if tokens[idx].text == "(" {
                         mask[idx] = true;
                     }

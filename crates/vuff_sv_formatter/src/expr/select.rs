@@ -10,17 +10,20 @@
 
 use vuff_sv_ast::{NodeEvent, RefNode, SyntaxTree, Token};
 
+use crate::context::build_token_index;
+
 /// Mask over `tokens` — true on every `[` of a bit-select or part-select.
 pub(crate) fn select_open_bracket_mask(tree: &SyntaxTree, tokens: &[Token<'_>]) -> Vec<bool> {
     let mut mask = vec![false; tokens.len()];
     let mut select_depth: u32 = 0;
+    let tok_idx = build_token_index(tokens);
 
     for ev in tree.into_iter().event() {
         match ev {
             NodeEvent::Enter(ref node) => {
                 if let RefNode::Locate(loc) = node {
                     if select_depth > 0 {
-                        if let Some(idx) = tokens.iter().position(|t| t.offset == loc.offset) {
+                        if let Some(&idx) = tok_idx.get(&loc.offset) {
                             if tokens[idx].text == "[" {
                                 mask[idx] = true;
                             }
