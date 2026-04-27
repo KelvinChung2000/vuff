@@ -18,8 +18,8 @@ use vuff_sv_ast::{Parsed, SyntaxTree, Token};
 use crate::attribute::spans::{find_attribute_spans, AttributeSpan};
 use crate::directives::DirectiveAnchors;
 use crate::expr::{
-    apostrophe_brace_mask, call_open_paren_mask, concat_brace_masks, select_open_bracket_mask,
-    streaming_concat_mask, ternary_colon_mask,
+    apostrophe_brace_mask, build_ternary_chains, call_open_paren_mask, concat_brace_masks,
+    select_open_bracket_mask, streaming_concat_mask, ternary_colon_mask, TernaryChainInfo,
 };
 use crate::indent_map::cst_depth_map;
 use crate::list::inst_port_list::{collect_inst_port_lists, InstPortList};
@@ -73,6 +73,7 @@ pub(crate) struct FormatCtxMasks {
     pub(crate) port_lists: Vec<PortList>,
     pub(crate) wrap_open: Vec<bool>,
     pub(crate) wrap_close: Vec<bool>,
+    pub(crate) ternary_chains: TernaryChainInfo,
 }
 
 impl FormatCtxMasks {
@@ -105,6 +106,7 @@ impl FormatCtxMasks {
             excluded.insert(l.paren_open);
         }
         let (wrap_open, wrap_close) = wrap_delimiter_masks(tokens, source, &excluded);
+        let ternary_chains = build_ternary_chains(tree, tokens, source);
         Self {
             attr_spans,
             port_paren,
@@ -127,6 +129,7 @@ impl FormatCtxMasks {
             port_lists,
             wrap_open,
             wrap_close,
+            ternary_chains,
         }
     }
 }
@@ -172,6 +175,12 @@ pub(crate) struct Formatter {
     /// indentation by one level until the terminator (`;`, `begin`, …).
     pub(crate) in_statement: bool,
     pub(crate) out: Vec<FormatElement>,
+    /// Best-effort tracker of the current visual column. Used by rules
+    /// that need to align tokens (e.g. multi-line ternary `?`). Updated
+    /// alongside every `push_*`. The pretty-printer in `vuff_formatter`
+    /// is the source of truth for actual output, but our IR only uses
+    /// `Text` / `StaticText` / `HardLine` so the tracker stays accurate.
+    pub(crate) col: u32,
 }
 
 impl Formatter {
@@ -181,18 +190,23 @@ impl Formatter {
             depth: 0,
             in_statement: false,
             out: Vec::with_capacity(expected_capacity),
+            col: 0,
         }
     }
 
     pub(crate) fn push_text(&mut self, s: impl Into<String>) {
-        self.out.push(FormatElement::Text(Cow::Owned(s.into())));
+        let s = s.into();
+        self.col += u32::try_from(s.chars().count()).unwrap_or(u32::MAX);
+        self.out.push(FormatElement::Text(Cow::Owned(s)));
     }
 
     pub(crate) fn push_static(&mut self, s: &'static str) {
+        self.col += u32::try_from(s.chars().count()).unwrap_or(u32::MAX);
         self.out.push(FormatElement::StaticText(s));
     }
 
     pub(crate) fn push_hardline(&mut self) {
+        self.col = 0;
         self.out.push(FormatElement::HardLine);
     }
 

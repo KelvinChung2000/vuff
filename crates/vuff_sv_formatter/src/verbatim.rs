@@ -222,6 +222,18 @@ pub(crate) fn format_token_range(
     > = inst_port_lists.iter().map(|l| (l.paren_open, l)).collect();
     let wrap_open = m.wrap_open.as_slice();
     let wrap_close = m.wrap_close.as_slice();
+    // Per-chain anchor column for multi-line ternary `?` alignment.
+    // `ternary_q_anchor` holds the column where the chain's leftmost
+    // `?` landed; `ternary_start_col` holds the column where the
+    // chain's leftmost token landed. Populated lazily as the CST
+    // emission reaches each landmark.
+    let mut ternary_q_anchor: std::collections::HashMap<usize, u32> =
+        std::collections::HashMap::new();
+    let mut ternary_start_col: std::collections::HashMap<usize, u32> =
+        std::collections::HashMap::new();
+    // Maps chain_id of a chain `:` we just emitted; the next token
+    // pads to that chain's start column.
+    let mut pending_chain_continuation: Option<usize> = None;
 
     let first_global_idx = range.start;
     let mut cursor: usize = leading_from;
@@ -390,6 +402,7 @@ pub(crate) fn format_token_range(
         if wants_allman_break(opts, t.text, between, prev_text) {
             if let Some(FormatElement::StaticText(" ")) = f.out.last() {
                 f.out.pop();
+                f.col = f.col.saturating_sub(1);
             }
             f.push_hardline();
             f.push_indent_structural();
@@ -415,7 +428,61 @@ pub(crate) fn format_token_range(
             }
         }
 
+        // Multi-line ternary chain alignment.
+        //
+        // (1) Record the column where the chain begins (first token of
+        //     the chain root CE). Continuations align to this column.
+        // (2) When a chain `:` was just emitted and the next token
+        //     starts a new line, pad up to the chain's start column.
+        // (3) When this token is a `?` in a multi-line chain, pad up
+        //     to the chain's `?` anchor column.
+        if let Some(&chain_id) = ctx
+            .masks
+            .ternary_chains
+            .first_tok
+            .get(&global_i)
+        {
+            // Snapshot the chain start column AND seed the chain's `?`
+            // anchor as `start + max_cond_width + 1` (the `+1` covers
+            // the space the binary-op spacing rule emits before `?`).
+            ternary_start_col.insert(chain_id, f.col);
+            if let Some(&max_w) = ctx
+                .masks
+                .ternary_chains
+                .max_cond_width
+                .get(&chain_id)
+            {
+                ternary_q_anchor.insert(chain_id, f.col + max_w + 1);
+            }
+        }
+        if let Some(chain_id) = pending_chain_continuation.take() {
+            if let Some(&start) = ternary_start_col.get(&chain_id) {
+                if start > f.col {
+                    let pad = (start - f.col) as usize;
+                    f.push_text(" ".repeat(pad));
+                }
+            }
+        }
+        if t.text == "?" {
+            if let Some(&(chain_id, _pos)) = ctx.masks.ternary_chains.by_q_tok.get(&global_i) {
+                if let Some(&anchor) = ternary_q_anchor.get(&chain_id) {
+                    if anchor > f.col {
+                        let pad = (anchor - f.col) as usize;
+                        f.push_text(" ".repeat(pad));
+                    }
+                }
+            }
+        }
+
         f.push_text(t.text.to_owned());
+
+        // Mark chain colons so the next token can align as a
+        // continuation if it starts on a new line.
+        if t.text == ":" {
+            if let Some(&chain_id) = ctx.masks.ternary_chains.by_colon_tok.get(&global_i) {
+                pending_chain_continuation = Some(chain_id);
+            }
+        }
 
         // Increment token_depth on openers — except when this opener is the
         // start of a newline-triggered wrap pair, since `wrap_depth` already

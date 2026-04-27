@@ -43,7 +43,10 @@ pub(crate) fn emit_trivia_at(
             CommentTrailing::NewLineIndent => {
                 if let Some(FormatElement::Text(last)) = f.out.last() {
                     if last.chars().all(|c| c == ' ' || c == '\t') {
+                        let popped_chars = u32::try_from(last.chars().count())
+                            .unwrap_or(u32::MAX);
                         f.out.pop();
+                        f.col = f.col.saturating_sub(popped_chars);
                         f.depth = tail_depth;
                         f.push_indent_for_new_line();
                     }
