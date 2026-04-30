@@ -8,9 +8,89 @@
 //! `if` / `for` / `while` / `always*` / `initial` / `final`.
 
 use vuff_sv_ast::{
-    FunctionStatementOrNull, NodeEvent, RefNode, Statement, StatementItem, StatementOrNull,
-    SyntaxTree, Token,
+    DirectiveDetail, FunctionStatementOrNull, NodeEvent, Parsed, RefNode, Statement, StatementItem,
+    StatementOrNull, SyntaxTree, Token,
 };
+
+/// `is_directive_start[i] == true` when token `i` is the first token of
+/// a surviving preprocessor directive line (`\`define`, `\`timescale`,
+/// `\`include`, …). The verbatim engine uses this to reset
+/// `in_statement` at the directive boundary so a chained sequence like
+/// `\`timescale 1 ns / 1 ps` followed by `\`define X 0` doesn't carry
+/// the prior continuation bump into the new directive.
+pub(crate) fn directive_start_mask(parsed: &Parsed, tokens: &[Token<'_>]) -> Vec<bool> {
+    let mut out = vec![false; tokens.len()];
+    if tokens.is_empty() {
+        return out;
+    }
+    let offsets: Vec<usize> = tokens.iter().map(|t| t.offset).collect();
+    for d in parsed.tree.directives() {
+        if d.original_path != parsed.original_path {
+            continue;
+        }
+        let Some(pp) = d.pp_range else {
+            continue;
+        };
+        let idx = offsets.partition_point(|&o| o < pp.begin);
+        if idx < tokens.len() && tokens[idx].offset < pp.end {
+            out[idx] = true;
+        }
+    }
+    out
+}
+
+/// Number of `\`ifdef`/`\`ifndef`/etc. branch bodies enclosing each token.
+/// Used to indent active code one level deeper per enclosing chain so the
+/// chain's keyword can sit one level outside its body. Tokens outside any
+/// chain get `0`.
+pub(crate) fn chain_depth_map(parsed: &Parsed, tokens: &[Token<'_>]) -> Vec<u32> {
+    let intervals = collect_branch_body_intervals(parsed);
+    if intervals.is_empty() {
+        return vec![0u32; tokens.len()];
+    }
+    tokens
+        .iter()
+        .map(|t| {
+            let Some(orig) = parsed.origin_in_original(t.offset) else {
+                return 0;
+            };
+            chain_depth_at(&intervals, orig)
+        })
+        .collect()
+}
+
+/// Branch-body byte ranges (in original-source coordinates) for every
+/// `\`ifdef` / `\`ifndef` / `\`elsif` / `\`else` branch, regardless of
+/// whether it was taken.
+pub(crate) fn collect_branch_body_intervals(parsed: &Parsed) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for d in parsed.tree.directives() {
+        if d.original_path != parsed.original_path {
+            continue;
+        }
+        let DirectiveDetail::IfdefChain(ref chain) = d.detail else {
+            continue;
+        };
+        for b in &chain.branches {
+            if let Some(body) = &b.body_original_range {
+                out.push((body.begin, body.end));
+            }
+        }
+    }
+    out
+}
+
+/// Count of branch-body intervals containing `pos` (linear; the count is
+/// always small in practice).
+pub(crate) fn chain_depth_at(intervals: &[(usize, usize)], pos: usize) -> u32 {
+    u32::try_from(
+        intervals
+            .iter()
+            .filter(|&&(b, e)| b <= pos && pos < e)
+            .count(),
+    )
+    .unwrap_or(0)
+}
 
 /// Per-frame record so Leave dedents the exact amount Enter bumped.
 /// `kind` is `None` for `Locate` frames (they never bump).

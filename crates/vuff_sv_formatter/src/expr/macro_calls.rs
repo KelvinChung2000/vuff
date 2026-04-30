@@ -24,9 +24,8 @@ use vuff_sv_ast::{DirectiveDetail, DirectiveKind, Parsed, Token};
 
 #[derive(Debug)]
 pub(crate) struct MacroRun {
-    /// First token index in the run.
-    pub(crate) start: usize,
-    /// Last token index in the run (inclusive).
+    /// Last token index in the run (inclusive). The first index is the
+    /// key of `MacroCallInfo::run_at_start`.
     pub(crate) end: usize,
     /// Original-source text of the macro call site (e.g.
     /// `` `assert(condition) ``).
@@ -93,7 +92,6 @@ pub(crate) fn build_macro_calls(parsed: &Parsed, tokens: &[Token<'_>]) -> MacroC
         run_at_start.insert(
             start_idx,
             MacroRun {
-                start: start_idx,
                 end: end_idx,
                 call_text: usage.call_text.clone(),
             },

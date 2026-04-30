@@ -10,7 +10,7 @@
 use vuff_sv_ast::{NodeEvent, RefNode, SyntaxTree, Token};
 
 use crate::context::{build_token_index, FormatCtx, Formatter};
-use crate::tokens::trivia::emit_trivia_at;
+use crate::tokens::trivia::{emit_trivia_at, emit_trivia_slice, ensure_fresh_line, SliceMode};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct InstPortRow {
@@ -136,17 +136,32 @@ pub(crate) fn collect_inst_port_lists(
 pub(crate) fn render_wrapped(ctx: &FormatCtx<'_>, f: &mut Formatter, list: &InstPortList) {
     f.push_text("(".to_owned());
 
+    let row_depth = f.depth + 1;
+    let close_depth = f.depth;
+
     if list.rows.is_empty() {
+        emit_trivia_slice(
+            f,
+            &ctx.trivia.slices[list.paren_close],
+            row_depth,
+            0,
+            SliceMode::Embedded,
+        );
         f.push_text(")".to_owned());
         return;
     }
 
-    let row_depth = f.depth + 1;
-    let close_depth = f.depth;
-
     for (i, row) in list.rows.iter().enumerate() {
-        f.push_hardline();
-        push_indent_at_depth(f, row_depth);
+        emit_trivia_slice(
+            f,
+            &ctx.trivia.slices[row.start],
+            row_depth,
+            0,
+            SliceMode::Embedded,
+        );
+
+        ensure_fresh_line(f);
+        f.push_indent_levels(row_depth);
 
         let saved = f.depth;
         f.depth = row_depth;
@@ -159,20 +174,17 @@ pub(crate) fn render_wrapped(ctx: &FormatCtx<'_>, f: &mut Formatter, list: &Inst
         }
     }
 
-    f.push_hardline();
-    push_indent_at_depth(f, close_depth);
-    f.push_text(")".to_owned());
-}
+    emit_trivia_slice(
+        f,
+        &ctx.trivia.slices[list.paren_close],
+        row_depth,
+        0,
+        SliceMode::Embedded,
+    );
 
-fn push_indent_at_depth(f: &mut Formatter, depth: u32) {
-    if depth == 0 {
-        return;
-    }
-    let mut buf = String::with_capacity(f.indent_text.len() * depth as usize);
-    for _ in 0..depth {
-        buf.push_str(&f.indent_text);
-    }
-    f.push_text(buf);
+    ensure_fresh_line(f);
+    f.push_indent_levels(close_depth);
+    f.push_text(")".to_owned());
 }
 
 fn emit_row_tokens(ctx: &FormatCtx<'_>, f: &mut Formatter, row: &InstPortRow) {
@@ -187,7 +199,7 @@ fn emit_row_tokens(ctx: &FormatCtx<'_>, f: &mut Formatter, row: &InstPortRow) {
             let no_space =
                 prev_text.is_some_and(|p| crate::tokens::spacing::no_space_between(p, t.text));
             if between.contains('\n') || between.contains("//") || between.contains("/*") {
-                emit_trivia_at(f, between, false, f.depth, f.depth);
+                emit_trivia_at(f, between, false, f.depth);
             } else if no_space {
                 // drop
             } else if needs_space {

@@ -16,13 +16,12 @@ use vuff_formatter::{FormatElement, PrintOptions};
 use vuff_sv_ast::{Parsed, SyntaxTree, Token};
 
 use crate::attribute::spans::{find_attribute_spans, AttributeSpan};
-use crate::directives::DirectiveAnchors;
 use crate::expr::{
     apostrophe_brace_mask, build_macro_calls, build_ternary_chains, call_open_paren_mask,
     concat_brace_masks, select_open_bracket_mask, streaming_concat_mask, ternary_colon_mask,
     MacroCallInfo, TernaryChainInfo,
 };
-use crate::indent_map::cst_depth_map;
+use crate::indent_map::{chain_depth_map, cst_depth_map, directive_start_mask};
 use crate::list::inst_port_list::{collect_inst_port_lists, InstPortList};
 use crate::list::param_port_list::{collect_param_port_lists, ParamPortList};
 use crate::list::port_align::{collect_port_lists, PortList};
@@ -32,6 +31,7 @@ use crate::list::{
     param_assign_pound_mask,
 };
 use crate::stmt::{control_header_paren_mask, statement_boundary_mask, statement_reset_mask};
+use crate::trivia::TriviaMap;
 
 /// Reverse index from a token's preprocessed-source byte offset to its
 /// position in the flat token list. The CST visitor surfaces every
@@ -69,6 +69,15 @@ pub(crate) struct FormatCtxMasks {
     pub(crate) is_stmt_boundary: Vec<bool>,
     pub(crate) is_stmt_reset: Vec<bool>,
     pub(crate) cst_depth: Vec<u32>,
+    /// Per-token count of `\`ifdef` branch bodies that enclose the
+    /// token's original-source position. Bumps active code one level
+    /// per enclosing chain so the keyword sits at the chain's outer
+    /// scope.
+    pub(crate) chain_depth: Vec<u32>,
+    /// `true` at each token index that begins a surviving preprocessor
+    /// directive (`\`define`, `\`timescale`, `\`include`, …). Used to
+    /// reset the in-statement continuation bump.
+    pub(crate) directive_start: Vec<bool>,
     pub(crate) inst_port_lists: Vec<InstPortList>,
     pub(crate) param_port_lists: Vec<ParamPortList>,
     pub(crate) port_lists: Vec<PortList>,
@@ -96,6 +105,8 @@ impl FormatCtxMasks {
         let is_stmt_boundary = statement_boundary_mask(tree, tokens);
         let is_stmt_reset = statement_reset_mask(tree, tokens);
         let cst_depth = cst_depth_map(tree, tokens);
+        let chain_depth = chain_depth_map(parsed, tokens);
+        let directive_start = directive_start_mask(parsed, tokens);
         let inst_port_lists = collect_inst_port_lists(tree, tokens, source);
         let param_port_lists = collect_param_port_lists(tree, tokens, source);
         let port_lists = collect_port_lists(tree, tokens, source);
@@ -129,6 +140,8 @@ impl FormatCtxMasks {
             is_stmt_boundary,
             is_stmt_reset,
             cst_depth,
+            chain_depth,
+            directive_start,
             inst_port_lists,
             param_port_lists,
             port_lists,
@@ -148,7 +161,7 @@ pub(crate) struct FormatCtx<'a> {
     pub(crate) tokens: &'a [Token<'a>],
     #[allow(dead_code)] // wired for future per-node dispatch (step 3+)
     pub(crate) tree: &'a SyntaxTree,
-    pub(crate) directive_anchors: &'a DirectiveAnchors,
+    pub(crate) trivia: &'a TriviaMap,
     pub(crate) parsed: &'a Parsed,
     pub(crate) masks: &'a FormatCtxMasks,
 }
@@ -158,7 +171,7 @@ impl<'a> FormatCtx<'a> {
         opts: &'a FormatOptions,
         parsed: &'a Parsed,
         tokens: &'a [Token<'a>],
-        directive_anchors: &'a DirectiveAnchors,
+        trivia: &'a TriviaMap,
         masks: &'a FormatCtxMasks,
     ) -> Self {
         Self {
@@ -166,7 +179,7 @@ impl<'a> FormatCtx<'a> {
             source: &parsed.text,
             tokens,
             tree: &parsed.tree,
-            directive_anchors,
+            trivia,
             parsed,
             masks,
         }
@@ -176,6 +189,10 @@ impl<'a> FormatCtx<'a> {
 /// Mutable emission state. Rules call `push_*` to write into `out`.
 pub(crate) struct Formatter {
     pub(crate) indent_text: String,
+    /// `[option].indent_width`. Stored alongside `indent_text` so
+    /// helpers that re-grid space-indented source (e.g. skipped
+    /// `\`ifdef` bodies) can convert source columns to indent levels.
+    pub(crate) indent_width: u8,
     pub(crate) depth: u32,
     /// True while inside an un-terminated statement — bumps continuation
     /// indentation by one level until the terminator (`;`, `begin`, …).
@@ -193,6 +210,7 @@ impl Formatter {
     pub(crate) fn new(opts: &FormatOptions, expected_capacity: usize) -> Self {
         Self {
             indent_text: indent_unit(opts),
+            indent_width: opts.indent_width,
             depth: 0,
             in_statement: false,
             out: Vec::with_capacity(expected_capacity),
@@ -229,7 +247,7 @@ impl Formatter {
         self.push_indent_levels(d);
     }
 
-    fn push_indent_levels(&mut self, levels: u32) {
+    pub(crate) fn push_indent_levels(&mut self, levels: u32) {
         if levels > 0 {
             let mut buf = String::with_capacity(self.indent_text.len() * levels as usize);
             for _ in 0..levels {

@@ -51,16 +51,14 @@ impl Format for ModuleDeclarationRule {
         // outside the lists still go through the standard token engine.
         // Wrap renderers fire only when the human inserted a newline inside
         // the `(...)` — otherwise the verbatim engine handles inline emission.
-        let param_list = ctx
-            .masks
-            .param_port_lists
-            .iter()
-            .find(|pl| pl.pound_tok >= start && pl.paren_close <= end && pl.has_internal_newline);
-        let port_list = ctx
-            .masks
-            .port_lists
-            .iter()
-            .find(|pl| pl.paren_open >= start && pl.paren_close <= end && pl.has_internal_newline);
+        let param_list =
+            ctx.masks.param_port_lists.iter().find(|pl| {
+                pl.pound_tok >= start && pl.paren_close <= end && pl.has_internal_newline
+            });
+        let port_list =
+            ctx.masks.port_lists.iter().find(|pl| {
+                pl.paren_open >= start && pl.paren_close <= end && pl.has_internal_newline
+            });
 
         let mut cursor = start;
         let mut leading_from = self.leading_from;

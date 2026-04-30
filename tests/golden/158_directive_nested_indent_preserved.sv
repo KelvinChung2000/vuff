@@ -1,15 +1,19 @@
 module m;
 `ifdef A
-`ifdef B
-  logic a;
-`endif
+  `ifdef B
+    `define X 1
+  `else
+    `define X 0
+  `endif
 `endif
 endmodule
 // expected -----
 module m;
 `ifdef A
   `ifdef B
-    logic a;
+    `define X 1
+  `else
+    `define X 0
   `endif
 `endif
 endmodule

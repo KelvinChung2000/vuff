@@ -5,28 +5,12 @@
 use vuff_formatter::FormatElement;
 
 use crate::context::Formatter;
+use crate::trivia::{TriviaSegment, TriviaSlice};
 
-/// Normalize a trivia slice. Mutates `f.out` directly.
-///
-/// The caller has pre-set `f.depth` to the upcoming token's depth. This
-/// entry point uses that depth for both comment lines and the trailing
-/// indent. Use [`emit_trivia_at`] when the two should differ (e.g.
-/// comments above a dedenting closer belong to the outgoing block).
-pub(crate) fn emit_trivia(f: &mut Formatter, slice: &str, is_leading: bool) {
-    let d = f.depth;
-    emit_trivia_at(f, slice, is_leading, d, d);
-}
-
-/// Like [`emit_trivia`] but indent comments and blank-line markers at
-/// `body_depth` while leaving the trailing indent (for the next token)
-/// at `tail_depth`.
-pub(crate) fn emit_trivia_at(
-    f: &mut Formatter,
-    slice: &str,
-    is_leading: bool,
-    body_depth: u32,
-    tail_depth: u32,
-) {
+/// Emit raw trivia bytes (for row-internal emitters in the list crates
+/// that don't yet route through the classified [`TriviaSlice`] API).
+/// Comment lines and the trailing indent both render at `depth`.
+pub(crate) fn emit_trivia_at(f: &mut Formatter, slice: &str, is_leading: bool, depth: u32) {
     if slice.is_empty() {
         return;
     }
@@ -35,29 +19,10 @@ pub(crate) fn emit_trivia_at(
     let saved = f.depth;
 
     if has_comment {
-        f.depth = body_depth;
-        let trailing = emit_trivia_with_comments(f, slice, is_leading);
-        match trailing {
-            // Trailing indent for a token landing on a fresh line — retarget
-            // to tail_depth so the next token sits at the caller's indent.
-            CommentTrailing::NewLineIndent => {
-                if let Some(FormatElement::Text(last)) = f.out.last() {
-                    if last.chars().all(|c| c == ' ' || c == '\t') {
-                        let popped_chars = u32::try_from(last.chars().count())
-                            .unwrap_or(u32::MAX);
-                        f.out.pop();
-                        f.col = f.col.saturating_sub(popped_chars);
-                        f.depth = tail_depth;
-                        f.push_indent_for_new_line();
-                    }
-                }
-            }
-            // Inline trailing — the next token sits on the same line as the
-            // last comment. emit_trivia_with_comments already pushed a single
-            // space (or pushed nothing when the comment ended at slice end);
-            // leave the buffer alone in either case.
-            CommentTrailing::InlineSpace | CommentTrailing::None => {}
-        }
+        f.depth = depth;
+        // Inline / None trailing forms need no fixup; the indent already
+        // sits at `depth` since body and tail share it.
+        let _ = emit_trivia_with_comments(f, slice, is_leading);
         f.depth = saved;
         return;
     }
@@ -74,7 +39,7 @@ pub(crate) fn emit_trivia_at(
     for _ in 0..emit_lines {
         f.push_hardline();
     }
-    f.depth = tail_depth;
+    f.depth = depth;
     f.push_indent_for_new_line();
     f.depth = saved;
 }
@@ -131,8 +96,18 @@ fn emit_trivia_with_comments(f: &mut Formatter, slice: &str, is_leading: bool) -
                 f.push_text(stripped.to_owned());
             } else {
                 let content = stripped.trim_start_matches([' ', '\t']);
-                f.push_indent_for_new_line();
-                f.push_text(content.to_owned());
+                // `\`define` / `\`undef` / etc. lines that survive
+                // preprocessing keep their original indentation — they
+                // line up with surrounding `\`ifdef` / `\`endif`
+                // anchors that also preserve user-written indent.
+                // Comments (`//`) are re-indented to the current depth
+                // so they match the code they sit alongside.
+                if content.starts_with('`') {
+                    f.push_text(stripped.to_owned());
+                } else {
+                    f.push_indent_for_new_line();
+                    f.push_text(content.to_owned());
+                }
             }
             blank_run = 0;
         }
@@ -198,6 +173,264 @@ pub(crate) fn block_state_after(mut in_block: bool, line: &str) -> bool {
         i += 1;
     }
     in_block
+}
+
+/// How a [`TriviaSlice`] is rendered.
+#[derive(Clone, Copy)]
+pub(crate) enum SliceMode {
+    /// Standalone emission. Handles file-leading suppression, blank
+    /// lines, and pushes a tail indent for the upcoming token.
+    Standalone { is_leading: bool, tail_depth: u32 },
+    /// Caller (e.g. a list renderer) owns row structure. Blank-line
+    /// segments are dropped; no tail indent is pushed; the caller
+    /// places its own hardline / indent for the next row.
+    Embedded,
+}
+
+/// Emit a classified [`TriviaSlice`] into the formatter's IR buffer.
+///
+/// `body_depth` indents comment lines that render on their own line.
+/// `chain_floor` is the maximum `\`ifdef`-chain depth contributed by
+/// the slice's adjacent tokens; directive segments subtract it so a
+/// keyword renders at its own structural scope (= `body_depth -
+/// chain_floor + segment.chain_extra`) rather than inheriting the
+/// chain bump that bumped its neighbors deeper.
+pub(crate) fn emit_trivia_slice(
+    f: &mut Formatter,
+    slice: &TriviaSlice,
+    body_depth: u32,
+    chain_floor: u32,
+    mode: SliceMode,
+) {
+    if slice.segments.is_empty() {
+        if let SliceMode::Standalone {
+            is_leading,
+            tail_depth,
+        } = mode
+        {
+            emit_pure_whitespace_gap(f, slice.pp_newline_count, tail_depth, is_leading);
+        }
+        return;
+    }
+
+    let saved_depth = f.depth;
+    // Comments / preserved directive lines stand outside any in-progress
+    // statement. A surviving `\`define X Y` at top level leaves
+    // `in_statement = true` because nothing in the token stream resets it,
+    // which would over-shift the following comment by one continuation
+    // indent. Suppress for the duration of this slice and restore at the
+    // end.
+    let saved_in_statement = f.in_statement;
+    f.in_statement = false;
+    let mut last_was_inline_only = false;
+
+    for (idx, seg) in slice.segments.iter().enumerate() {
+        let is_first = idx == 0;
+        match seg {
+            TriviaSegment::Blank => {
+                ensure_fresh_line(f);
+                f.push_hardline();
+                last_was_inline_only = false;
+            }
+            TriviaSegment::LineComment {
+                text,
+                nl_before,
+                nl_after,
+                chain_extra,
+            }
+            | TriviaSegment::BlockComment {
+                text,
+                nl_before,
+                nl_after,
+                chain_extra,
+            } => {
+                let depth = body_depth.saturating_sub(chain_floor) + *chain_extra;
+                if *nl_before || !is_first {
+                    place_on_fresh_line(f, is_first, mode, depth);
+                } else if needs_inline_space(f, mode) {
+                    f.push_static(" ");
+                }
+                push_multiline_text(f, text);
+                last_was_inline_only = !*nl_after;
+            }
+            TriviaSegment::DirectiveLine { text, chain_extra }
+            | TriviaSegment::IfdefKeyword { text, chain_extra }
+            | TriviaSegment::EmptyMacroCall {
+                call_text: text,
+                chain_extra,
+            } => {
+                let depth = body_depth.saturating_sub(chain_floor) + *chain_extra;
+                place_on_fresh_line(f, is_first, mode, depth);
+                f.push_text(text.clone());
+                last_was_inline_only = false;
+            }
+            TriviaSegment::SkippedBody { text, chain_extra } => {
+                // First line lands at column 0; `push_skipped_body_text`
+                // writes the indent itself so each continuation line
+                // also gets it.
+                let depth = body_depth.saturating_sub(chain_floor) + *chain_extra;
+                place_on_fresh_line(f, is_first, mode, 0);
+                push_skipped_body_text(f, text, depth);
+                last_was_inline_only = false;
+            }
+        }
+    }
+
+    f.depth = saved_depth;
+    f.in_statement = saved_in_statement;
+
+    if let SliceMode::Standalone { tail_depth, .. } = mode {
+        if last_was_inline_only {
+            f.push_static(" ");
+        } else {
+            ensure_fresh_line(f);
+            let saved = f.depth;
+            f.depth = tail_depth;
+            f.push_indent_for_new_line();
+            f.depth = saved;
+        }
+    }
+}
+
+/// Place the cursor on a fresh line at `body_depth`. Skips the leading
+/// hardline when this is the first segment of a file-leading slot
+/// (nothing has been written yet), so the file doesn't open with a
+/// stray blank line. A `body_depth` of 0 is used by directive /
+/// skipped-body / empty-call segments that emit their original column
+/// via per-segment `leading_ws` instead of a structural indent.
+fn place_on_fresh_line(f: &mut Formatter, is_first: bool, mode: SliceMode, body_depth: u32) {
+    let suppress_leading = matches!(
+        mode,
+        SliceMode::Standalone { is_leading: true, .. }
+    ) && is_first
+        && f.col == 0
+        && f.out.is_empty();
+    if !suppress_leading {
+        ensure_fresh_line(f);
+    }
+    if body_depth > 0 {
+        f.depth = body_depth;
+        f.push_indent_for_new_line();
+    }
+}
+
+/// First segment is inline (no `nl_before`). Emit a separating space
+/// unless the buffer is empty at file start.
+fn needs_inline_space(f: &Formatter, mode: SliceMode) -> bool {
+    if let SliceMode::Standalone { is_leading: true, .. } = mode {
+        f.col != 0
+    } else {
+        true
+    }
+}
+
+fn emit_pure_whitespace_gap(f: &mut Formatter, newlines: u32, tail_depth: u32, is_leading: bool) {
+    if newlines == 0 {
+        if !is_leading && f.col != 0 {
+            f.push_static(" ");
+        }
+        return;
+    }
+    let lines = newlines.min(2);
+    for _ in 0..lines {
+        f.push_hardline();
+    }
+    let saved = f.depth;
+    f.depth = tail_depth;
+    f.push_indent_for_new_line();
+    f.depth = saved;
+}
+
+pub(crate) fn ensure_fresh_line(f: &mut Formatter) {
+    if f.col != 0 {
+        f.push_hardline();
+    }
+}
+
+/// Push text that may contain `\n`, splitting on newlines and emitting
+/// one hard-line between each line so the IR carries newlines as
+/// `HardLine` rather than embedded in `Text`. Each continuation line is
+/// pushed verbatim — its original indent is part of the text.
+fn push_multiline_text(f: &mut Formatter, text: &str) {
+    if !text.contains('\n') {
+        f.push_text(text.to_owned());
+        return;
+    }
+    let mut first = true;
+    for line in text.split('\n') {
+        if !first {
+            f.push_hardline();
+        }
+        first = false;
+        if !line.is_empty() {
+            f.push_text(line.to_owned());
+        }
+    }
+}
+
+/// Re-indent the verbatim text of a `taken=false` branch onto the
+/// formatter's grid. Each line's leading whitespace (tabs and spaces,
+/// where one tab counts as `indent_width` spaces) is converted to a
+/// column count; the smallest column across non-blank lines is treated
+/// as level 0 and stripped, then `base_depth + relative_levels` of
+/// `indent_text` is prepended. Sub-indent-width residue carries over
+/// as raw spaces so weird alignment inside the body isn't destroyed.
+///
+/// `place_on_fresh_line` is expected to have positioned the cursor at
+/// column 0 — this helper writes its own indent on every line.
+fn push_skipped_body_text(f: &mut Formatter, text: &str, base_depth: u32) {
+    let tab_width = usize::from(f.indent_width.max(1));
+    let lead_columns = |line: &str| -> usize {
+        let mut col = 0usize;
+        for b in line.bytes() {
+            match b {
+                b' ' => col += 1,
+                b'\t' => col += tab_width,
+                _ => break,
+            }
+        }
+        col
+    };
+
+    let common_columns = text
+        .split('\n')
+        .filter(|l| {
+            !l.is_empty() && !l.bytes().all(|b| b == b' ' || b == b'\t')
+        })
+        .map(lead_columns)
+        .min()
+        .unwrap_or(0);
+
+    let mut first = true;
+    for line in text.split('\n') {
+        if !first {
+            f.push_hardline();
+        }
+        first = false;
+        if line.is_empty() {
+            continue;
+        }
+        let lead_byte_count = line
+            .bytes()
+            .take_while(|&b| b == b' ' || b == b'\t')
+            .count();
+        let lead_cols = lead_columns(line);
+        let rel_cols = lead_cols.saturating_sub(common_columns);
+        let rel_levels = rel_cols / tab_width;
+        let rel_residue = rel_cols % tab_width;
+        let rest = &line[lead_byte_count..];
+        let total_levels = base_depth as usize + rel_levels;
+        let mut buf =
+            String::with_capacity(f.indent_text.len() * total_levels + rel_residue + rest.len());
+        for _ in 0..total_levels {
+            buf.push_str(&f.indent_text);
+        }
+        for _ in 0..rel_residue {
+            buf.push(' ');
+        }
+        buf.push_str(rest);
+        f.push_text(buf);
+    }
 }
 
 /// Pop trailing hard-lines / blank indent texts and re-add exactly one

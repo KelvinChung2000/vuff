@@ -21,159 +21,9 @@ use crate::attribute::force_nl_before_mask;
 use crate::context::{FormatCtx, Formatter};
 use crate::list::render_wrapped;
 use crate::stmt::seq_block::wants_allman_break;
-use crate::directives::DirectiveAnchor;
 use crate::tokens::delimiters::{is_closer, is_opener};
 use crate::tokens::spacing::{force_space_between, no_space_between};
-use crate::tokens::trivia::{block_state_after, emit_trivia_at};
-
-/// Emit a span of inter-token trivia that contains stripped preprocessor
-/// directives. We can't just dump the directive lines and ignore the
-/// `between` slice — that would drop comments and active `\`define` lines
-/// that the preprocessor preserved in `parsed.text`. Instead, walk both
-/// inputs (the directive list and `between`'s non-blank lines) tagged
-/// with their byte offset in `parsed.original`, sort by that offset, and
-/// emit in original-source order.
-///
-/// `body_depth` is the indent for re-emitted comment / `\`define` lines;
-/// directive keywords always print at column 0. `tail_depth` is the
-/// indent used for the upcoming CST token.
-pub(crate) fn emit_directives_around(
-    ctx: &FormatCtx<'_>,
-    f: &mut Formatter,
-    between: &str,
-    between_offset: usize,
-    dirs: &[&DirectiveAnchor],
-    body_depth: u32,
-    tail_depth: u32,
-) {
-    enum Kind {
-        Directive,
-        Content,
-        Blank,
-    }
-    let mut events: Vec<(usize, usize, Kind, String)> = Vec::new();
-
-    for d in dirs {
-        events.push((d.orig_start, 0, Kind::Directive, d.text.clone()));
-    }
-
-    // Walk `between` (post-pp) line by line. Non-blank lines are emitted
-    // at `body_depth`; runs of blank lines collapse to at most one.
-    let mut pp_pos = between_offset;
-    let mut in_block = false;
-    let mut last_content_orig: Option<usize> = None;
-    let mut pending_blank = false;
-    let mut idx_seq: usize = 0;
-    for raw in between.split_inclusive('\n') {
-        let line_pp_start = pp_pos;
-        pp_pos += raw.len();
-        let line = raw
-            .trim_end_matches('\n')
-            .trim_end_matches([' ', '\t']);
-        let trimmed = line.trim_start_matches([' ', '\t']);
-        let was_in_block = in_block;
-        in_block = block_state_after(in_block, line);
-
-        if trimmed.is_empty() {
-            if last_content_orig.is_some() {
-                pending_blank = true;
-            }
-            continue;
-        }
-
-        let leading_ws = line.bytes().take_while(|&b| b == b' ' || b == b'\t').count();
-        // If origin lookup fails (the line came from a macro expansion or
-        // an `\`include`), fall back to "after every directive in this
-        // batch" — better to land at the end than at column 0 ahead of
-        // unrelated directives.
-        let orig = ctx
-            .parsed
-            .origin_in_original(line_pp_start + leading_ws)
-            .unwrap_or(usize::MAX);
-        let text = if was_in_block {
-            line.to_owned()
-        } else {
-            trimmed.to_owned()
-        };
-        if pending_blank {
-            idx_seq += 1;
-            events.push((orig.saturating_sub(1), idx_seq, Kind::Blank, String::new()));
-            pending_blank = false;
-        }
-        idx_seq += 1;
-        events.push((orig, idx_seq, Kind::Content, text));
-        last_content_orig = Some(orig);
-    }
-
-    // Sort by orig pos with `idx_seq` as tie-breaker so equal-pos events
-    // keep the order they were inserted (directives before content when a
-    // directive's recorded orig_start coincides with a content line).
-    events.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-
-    // Make sure we start on a fresh line — but only if anything has
-    // been emitted yet. At file start the buffer is empty and adding a
-    // hardline would inject a stray leading blank line.
-    if !f.out.is_empty()
-        && !matches!(
-            f.out.last(),
-            Some(FormatElement::HardLine | FormatElement::EmptyLine)
-        )
-    {
-        f.push_hardline();
-    }
-
-    let saved_depth = f.depth;
-    let saved_in_stmt = f.in_statement;
-    // Comments / `\`define` lines stand outside any in-progress statement;
-    // suppress continuation-indent for the entire emitted block,
-    // including the trailing indent for the upcoming token. The
-    // upcoming token starts on its own line at `tail_depth` — adding
-    // continuation indent here would over-shift it.
-    f.in_statement = false;
-    let mut emitted = false;
-    let mut blank_pending = false;
-    for (_, _, kind, text) in events {
-        match kind {
-            Kind::Blank => {
-                if emitted {
-                    blank_pending = true;
-                }
-            }
-            Kind::Directive => {
-                if emitted {
-                    f.push_hardline();
-                    if blank_pending {
-                        f.push_hardline();
-                    }
-                }
-                blank_pending = false;
-                f.push_text(text);
-                emitted = true;
-            }
-            Kind::Content => {
-                if emitted {
-                    f.push_hardline();
-                    if blank_pending {
-                        f.push_hardline();
-                    }
-                }
-                blank_pending = false;
-                f.depth = body_depth;
-                f.push_indent_for_new_line();
-                f.push_text(text);
-                emitted = true;
-            }
-        }
-    }
-
-    if emitted {
-        f.push_hardline();
-    }
-    f.depth = tail_depth;
-    f.push_indent_for_new_line();
-    f.depth = saved_depth;
-    f.in_statement = saved_in_stmt;
-}
+use crate::tokens::trivia::{emit_trivia_slice, SliceMode};
 
 // This function is intentionally long: it's the transitional engine
 // covering every CST shape that doesn't yet have a dedicated rule. Each
@@ -212,6 +62,8 @@ pub(crate) fn format_token_range(
     let is_stmt_boundary = m.is_stmt_boundary.as_slice();
     let is_stmt_reset = m.is_stmt_reset.as_slice();
     let cst_depth = m.cst_depth.as_slice();
+    let chain_depth = m.chain_depth.as_slice();
+    let directive_start = m.directive_start.as_slice();
     let inst_port_lists = &m.inst_port_lists;
     // Map from `(` token index → the inst-port list it opens. Used to splice
     // a wrapped renderer in mid-stream when the user has inserted a newline
@@ -295,7 +147,8 @@ pub(crate) fn format_token_range(
 
         // Pre-emit structural depth: CST-computed base + current token-level
         // block depth + any active newline-triggered wrap depth.
-        let curr_depth = cst_depth[global_i] + token_depth + wrap_depth;
+        let curr_depth =
+            cst_depth[global_i] + token_depth + wrap_depth + chain_depth[global_i];
         f.depth = curr_depth;
         // Indent inter-token trivia (comments, blank lines) at the max of
         // the previous and current token depths. A comment sitting on the
@@ -306,12 +159,13 @@ pub(crate) fn format_token_range(
         // Pre-emit: clear `in_statement` when either the upcoming token
         // is a statement terminator (`;`, `end`, `endcase`, …) or it's
         // the CST-declared first token of a new Statement / CaseItem.
-        if is_stmt_reset[global_i] || is_stmt_boundary[global_i] {
+        // Surviving directive lines (`\`define`, `\`timescale`, …) also
+        // start a fresh line — drop the carry-over so a chain of them
+        // doesn't accumulate continuation-indent.
+        if is_stmt_reset[global_i] || is_stmt_boundary[global_i] || directive_start[global_i] {
             f.in_statement = false;
         }
 
-        let has_newline = between.contains('\n');
-        let has_comment = between.contains("//") || between.contains("/*");
         let mut forbids_space = prev_text.is_some_and(|p| no_space_between(p, t.text));
         let mut needs_space = prev_text.is_some_and(|p| force_space_between(p, t.text));
         if is_ternary_colon[global_i] || prev_was_ternary_colon {
@@ -366,21 +220,17 @@ pub(crate) fn format_token_range(
         // into the trivia emission: directives and any preserved
         // comment / `\`define` lines from `between` are interleaved by
         // their original-source position, so the file's source order
-        // round-trips even when conditional directives were stripped.
-        let dirs: Vec<&DirectiveAnchor> = ctx
-            .directive_anchors
-            .iter()
-            .filter(|a| a.anchor_tok == global_i)
-            .collect();
+        let slice = &ctx.trivia.slices[global_i];
+        // The slice is fully consumed by the caller when `cursor` has
+        // already reached the upcoming token's offset. Special case
+        // the file-leading slot: it can have classified segments
+        // (stripped directives at BOF) even though its pp range is
+        // empty — emit it as long as nothing has been written yet.
+        let gap_has_bytes = cursor < t.offset || (global_i == 0 && f.out.is_empty());
+        let slice_has_content =
+            gap_has_bytes && (!slice.segments.is_empty() || slice.pp_newline_count > 0);
 
-        if !dirs.is_empty() {
-            // Use `curr_depth` (the upcoming token's depth) as the body
-            // indent for re-emitted comments / active `\`define`s.
-            // `trivia_depth` would carry over the previous token's deeper
-            // depth, which over-indents top-level content sitting between
-            // a closing punctuation and the next description.
-            emit_directives_around(ctx, f, between, cursor, &dirs, curr_depth, curr_depth);
-        } else if prev_was_wrap_open {
+        if prev_was_wrap_open {
             // First token after a newline-triggered wrap opener: force a
             // hardline + indent at the new (deeper) wrap level, ignoring
             // the user's source spacing.
@@ -395,8 +245,34 @@ pub(crate) fn format_token_range(
         } else if force_nl_before[global_i] {
             f.push_hardline();
             f.push_indent_for_new_line();
-        } else if has_newline || has_comment {
-            emit_trivia_at(f, between, false, trivia_depth, curr_depth);
+        } else if slice_has_content {
+            // `body_depth = trivia_depth` so a comment that sits
+            // above a dedenting closer (e.g. `end`) stays at the
+            // outgoing block's indent. Directive / skipped-body /
+            // empty-call segments ignore `body_depth` and emit at
+            // their original column via per-segment `leading_ws`.
+            // is_leading is only true for the first token of the file
+            // when the buffer is still empty.
+            let is_leading = global_i == 0 && f.out.is_empty();
+            // Chain bump from neighbors that's already baked into
+            // `trivia_depth` — directive segments subtract this so
+            // they sit at their own scope, not their neighbor's.
+            let prev_chain = if global_i > 0 {
+                chain_depth[global_i - 1]
+            } else {
+                0
+            };
+            let chain_floor = prev_chain.max(chain_depth[global_i]);
+            emit_trivia_slice(
+                f,
+                slice,
+                trivia_depth,
+                chain_floor,
+                SliceMode::Standalone {
+                    is_leading,
+                    tail_depth: curr_depth,
+                },
+            );
         } else if needs_space {
             f.push_static(" ");
         } else if forbids_space {
@@ -444,22 +320,12 @@ pub(crate) fn format_token_range(
         //     starts a new line, pad up to the chain's start column.
         // (3) When this token is a `?` in a multi-line chain, pad up
         //     to the chain's `?` anchor column.
-        if let Some(&chain_id) = ctx
-            .masks
-            .ternary_chains
-            .first_tok
-            .get(&global_i)
-        {
+        if let Some(&chain_id) = ctx.masks.ternary_chains.first_tok.get(&global_i) {
             // Snapshot the chain start column AND seed the chain's `?`
             // anchor as `start + max_cond_width + 1` (the `+1` covers
             // the space the binary-op spacing rule emits before `?`).
             ternary_start_col.insert(chain_id, f.col);
-            if let Some(&max_w) = ctx
-                .masks
-                .ternary_chains
-                .max_cond_width
-                .get(&chain_id)
-            {
+            if let Some(&max_w) = ctx.masks.ternary_chains.max_cond_width.get(&chain_id) {
                 ternary_q_anchor.insert(chain_id, f.col + max_w + 1);
             }
         }

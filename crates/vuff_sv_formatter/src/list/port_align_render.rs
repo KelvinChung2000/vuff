@@ -9,6 +9,7 @@
 use crate::context::{FormatCtx, Formatter};
 use crate::list::port_align::{PortList, PortRow, TokRange};
 use crate::tokens::spacing::{force_space_between, no_space_between};
+use crate::tokens::trivia::{emit_trivia_slice, ensure_fresh_line, SliceMode};
 
 pub(crate) fn render_port_list(ctx: &FormatCtx<'_>, f: &mut Formatter, list: &PortList) {
     // Always a single space between the module name and the port `(`.
@@ -19,7 +20,7 @@ pub(crate) fn render_port_list(ctx: &FormatCtx<'_>, f: &mut Formatter, list: &Po
         let open_offset = ctx.tokens[list.paren_open].offset;
         let between = &ctx.source[prev_end..open_offset];
         if between.contains('\n') || between.contains("//") || between.contains("/*") {
-            crate::tokens::trivia::emit_trivia_at(f, between, false, f.depth, f.depth);
+            crate::tokens::trivia::emit_trivia_at(f, between, false, f.depth);
         } else {
             f.push_static(" ");
         }
@@ -27,23 +28,38 @@ pub(crate) fn render_port_list(ctx: &FormatCtx<'_>, f: &mut Formatter, list: &Po
 
     f.push_text("(".to_owned());
 
+    // Stripped `\`ifdef`/`\`endif` chains and other trivia inside this
+    // list (chain wrapping a group of ports, comments between rows) are
+    // emitted via per-row trivia slots rather than the verbatim engine,
+    // since the engine never sees this token range.
+    let row_depth = f.depth + 1;
+    let close_depth = f.depth;
+
     if list.rows.is_empty() {
+        emit_trivia_slice(
+            f,
+            &ctx.trivia.slices[list.paren_close],
+            row_depth,
+            0,
+            SliceMode::Embedded,
+        );
         f.push_text(")".to_owned());
         return;
     }
 
     let widths = compute_widths(ctx, list);
 
-    // Rows and the closing `)` indent at the *structural* depth of the
-    // module header, not the statement-continuation depth. The module
-    // keyword sets `in_statement = true` in the verbatim engine; if we
-    // honored that, every row would be bumped another indent level.
-    let row_depth = f.depth + 1;
-    let close_depth = f.depth;
-
     for (i, row) in list.rows.iter().enumerate() {
-        f.push_hardline();
-        push_indent_at_depth(f, row_depth);
+        emit_trivia_slice(
+            f,
+            &ctx.trivia.slices[row_first_tok(row)],
+            row_depth,
+            0,
+            SliceMode::Embedded,
+        );
+
+        ensure_fresh_line(f);
+        f.push_indent_levels(row_depth);
 
         render_row(ctx, f, row, &widths);
 
@@ -51,23 +67,32 @@ pub(crate) fn render_port_list(ctx: &FormatCtx<'_>, f: &mut Formatter, list: &Po
         if !is_last {
             f.push_text(",".to_owned());
         }
-        emit_trailing_inline_comment(ctx, f, row, list, i);
     }
 
-    f.push_hardline();
-    push_indent_at_depth(f, close_depth);
+    emit_trivia_slice(
+        f,
+        &ctx.trivia.slices[list.paren_close],
+        row_depth,
+        0,
+        SliceMode::Embedded,
+    );
+
+    ensure_fresh_line(f);
+    f.push_indent_levels(close_depth);
     f.push_text(")".to_owned());
 }
 
-fn push_indent_at_depth(f: &mut Formatter, depth: u32) {
-    if depth == 0 {
-        return;
-    }
-    let mut buf = String::with_capacity(f.indent_text.len() * depth as usize);
-    for _ in 0..depth {
-        buf.push_str(&f.indent_text);
-    }
-    f.push_text(buf);
+fn row_first_tok(row: &PortRow) -> usize {
+    [
+        row.dir.map(|r| r.start),
+        row.typ.map(|r| r.start),
+        row.packed.map(|r| r.start),
+        Some(row.tail.start),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .unwrap_or(row.tail.start)
 }
 
 struct Widths {
@@ -256,40 +281,4 @@ fn split_packed(ctx: &FormatCtx<'_>, r: TokRange) -> (String, String) {
         String::new()
     };
     (hi, lo)
-}
-
-fn emit_trailing_inline_comment(
-    ctx: &FormatCtx<'_>,
-    f: &mut Formatter,
-    row: &PortRow,
-    list: &PortList,
-    row_idx: usize,
-) {
-    // Region between this row's `,` (or end of row) and the next row's
-    // first token (or `)`). If it contains a `//` or `/*` BEFORE the first
-    // newline, the comment is an inline trailer.
-    let after_tok = row.comma_tok.unwrap_or(row.tail.end);
-    let start_byte = ctx.tokens[after_tok].end();
-    let end_byte = if row_idx + 1 < list.rows.len() {
-        let next_row = &list.rows[row_idx + 1];
-        let next_first = next_row
-            .dir
-            .map(|r| r.start)
-            .or_else(|| next_row.typ.map(|r| r.start))
-            .or_else(|| next_row.packed.map(|r| r.start))
-            .unwrap_or(next_row.tail.start);
-        ctx.tokens[next_first].offset
-    } else {
-        ctx.tokens[list.paren_close].offset
-    };
-    let between = &ctx.source[start_byte..end_byte];
-    let Some(first_nl) = between.find('\n') else {
-        return;
-    };
-    let first_line = &between[..first_nl];
-    let trimmed = first_line.trim_start();
-    if trimmed.starts_with("//") || trimmed.starts_with("/*") {
-        f.push_static(" ");
-        f.push_text(trimmed.trim_end().to_owned());
-    }
 }

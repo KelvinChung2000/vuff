@@ -21,7 +21,6 @@
 
 mod attribute;
 mod context;
-mod directives;
 mod expr;
 mod format_ext;
 mod indent_map;
@@ -30,6 +29,7 @@ mod module;
 mod source_text;
 mod stmt;
 mod tokens;
+mod trivia;
 mod verbatim;
 
 use std::path::PathBuf;
@@ -56,9 +56,9 @@ pub fn format_source(src: &str, opts: &FormatOptions) -> Result<String, FormatEr
     assert_roundtrip(&parsed.text, &parsed.tree)?;
 
     let toks = tokens(&parsed.tree);
-    let directive_anchors = directives::scan(&parsed, &toks);
+    let trivia_map = trivia::build(&parsed, &toks);
     let masks = FormatCtxMasks::build(&parsed, &toks);
-    let ctx = FormatCtx::new(opts, &parsed, &toks, &directive_anchors, &masks);
+    let ctx = FormatCtx::new(opts, &parsed, &toks, &trivia_map, &masks);
     let mut f = Formatter::new(opts, toks.len() * 2 + 4);
     SourceTextRoot.fmt(&ctx, &mut f);
 
